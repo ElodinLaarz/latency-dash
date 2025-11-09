@@ -168,6 +168,32 @@ func (c *MetricsCalculator) Unsubscribe(ch chan *proto.MetricsUpdate) {
 	close(ch)
 }
 
+// GetAllMetrics returns a snapshot of all current metrics
+func (c *MetricsCalculator) GetAllMetrics() []*proto.MetricsUpdate {
+	c.metricsMu.RLock()
+	defer c.metricsMu.RUnlock()
+
+	updates := make([]*proto.MetricsUpdate, 0, len(c.metrics))
+	for _, m := range c.metrics {
+		// Only include metrics that have at least 2 events (so we have intervals)
+		if m.Count() >= 2 {
+			update := &proto.MetricsUpdate{
+				TargetId:    m.TargetID,
+				Key:         m.Key,
+				Min:         m.Min(),
+				Max:         m.Max(),
+				Avg:         m.Avg(),
+				P90:         m.P90(),
+				Count:       m.Count(),
+				LastUpdated: time.Now().UnixNano(),
+				Metadata:    m.Metadata,
+			}
+			updates = append(updates, update)
+		}
+	}
+	return updates
+}
+
 // Stop shuts down the metrics calculator and cleans up all resources.
 // It's safe to call Stop multiple times.
 func (c *MetricsCalculator) Stop() {
@@ -247,16 +273,27 @@ func (m *Metrics) Update(event *proto.Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Calculate time since last event for this key
-	var intervalMs float64
 	count := atomic.LoadInt64(&m.count)
 	currentTimeMs := float64(event.ServerTimestamp) / float64(time.Millisecond)
 
-	if count > 0 && m.Samples != nil && m.Samples.Value != nil {
-		// For subsequent events, calculate the interval since the last event
-		lastTime := m.Samples.Value
+	// Store the current timestamp in milliseconds in the circular buffer
+	m.Samples = m.Samples.Next()
+	m.Samples.Value = currentTimeMs
+
+	// Increment count first
+	atomic.AddInt64(&m.count, 1)
+
+	// For the first event, we just store the timestamp and return
+	// We need at least 2 events to calculate an interval
+	if count == 0 {
+		return
+	}
+
+	// Calculate time since last event for this key
+	var intervalMs float64
+	if m.Samples.Prev() != nil && m.Samples.Prev().Value != nil {
 		// Get the last timestamp from the ring buffer (stored in milliseconds)
-		lastEventTimeMs := lastTime.(float64)
+		lastEventTimeMs := m.Samples.Prev().Value.(float64)
 		intervalMs = currentTimeMs - lastEventTimeMs
 		// Ensure interval is non-negative
 		if intervalMs < 0 {
@@ -264,18 +301,14 @@ func (m *Metrics) Update(event *proto.Event) {
 		}
 	}
 
-	// Store the current timestamp in milliseconds in the circular buffer
-	m.Samples = m.Samples.Next()
-	m.Samples.Value = currentTimeMs
-
 	// Convert interval to nanoseconds for atomic operations (storing as int64)
 	intervalNs := int64(intervalMs * float64(millisecondsToNanoseconds))
 
-	if count == 0 {
+	// For the second event (count was 1, now 2), initialize min/max/avg
+	if count == 1 {
 		atomic.StoreInt64(&m.min, intervalNs)
 		atomic.StoreInt64(&m.max, intervalNs)
 		atomic.StoreInt64(&m.avg, intervalNs)
-		atomic.AddInt64(&m.count, 1)
 		p90 := m.calculatePercentile(P90Percentile)
 		atomic.StoreInt64(&m.p90, int64(p90*float64(time.Millisecond)))
 		return
@@ -303,16 +336,17 @@ func (m *Metrics) Update(event *proto.Event) {
 		}
 	}
 
-	// Update average
+	// Update average (count is now the new count after increment)
 	for {
 		currentAvg := atomic.LoadInt64(&m.avg)
-		newAvg := (currentAvg*count + intervalNs) / (count + 1)
+		// We have count intervals now (since we incremented count already)
+		// The average should be: (old_avg * (count-1) + new_interval) / count
+		newAvg := (currentAvg*(count-1) + intervalNs) / count
 		if atomic.CompareAndSwapInt64(&m.avg, currentAvg, newAvg) {
 			break
 		}
 	}
 
-	atomic.AddInt64(&m.count, 1)
 	p90 := m.calculatePercentile(P90Percentile)
 	atomic.StoreInt64(&m.p90, int64(p90*float64(time.Millisecond)))
 }
@@ -320,7 +354,8 @@ func (m *Metrics) Update(event *proto.Event) {
 func (m *Metrics) calculatePercentile(p float64) float64 {
 	count := atomic.LoadInt64(&m.count)
 	if count <= 1 {
-		return float64(atomic.LoadInt64(&m.avg)) / float64(millisecondsToNanoseconds)
+		// No intervals yet, return 0
+		return 0
 	}
 
 	// Collect intervals from consecutive timestamps in the ring buffer
@@ -346,6 +381,11 @@ func (m *Metrics) calculatePercentile(p float64) float64 {
 
 	if len(samples) == 0 {
 		return 0
+	}
+	
+	// For a single interval (count == 2), just return it
+	if len(samples) == 1 {
+		return samples[0]
 	}
 
 	// Sort samples

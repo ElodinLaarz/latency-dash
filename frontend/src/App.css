@@ -1,0 +1,111 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: #f0f2f5;
+}
+
+.app-header {
+  background: #001529;
+  color: white;
+  padding: 0 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 64px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+}
+
+.app-content {
+  flex: 1;
+  padding: 24px;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.ant-tag {
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+
+.ant-table {
+  background: white;
+}
+
+.ant-card {
+  border-radius: 8px;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+}
+
+.ant-card-head {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.ant-card-body {
+  padding: 24px;
+}
+
+.metric-value {
+  font-weight: 500;
+}
+
+.metric-label {
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.ant-tag-checkable {
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.ant-tag-checkable:not(.ant-tag-checkable-checked):hover {
+  color: #40a9ff;
+  border-color: #40a9ff;
+}
+
+.ant-tag-checkable-checked {
+  background: #1890ff;
+  color: white;
+}
+
+.ant-spin {
+  margin-right: 8px;
+}
+
+.ant-alert {
+  margin-bottom: 16px;
+}
+
+/* Flash animation for updated rows */
+@keyframes flash {
+  0% {
+    background-color: #e6f7ff;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.row-flash {
+  animation: flash 0.5s ease-out;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .app-content {
+    padding: 16px;
+  }
+  
+  .ant-card-body {
+    padding: 16px;
+  }
+}

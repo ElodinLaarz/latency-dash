@@ -16,7 +16,7 @@ import (
 
 const (
 	startTimeout    = 500 * time.Millisecond
-	shutdownTimeout = 5 * time.Second
+	shutdownTimeout = 1 * time.Hour
 )
 
 func main() {

@@ -36,10 +36,20 @@ message SubscriptionMessage {
   repeated string keys = 3;   // Specific keys to subscribe to (empty for all)
 }
 
+// SubscriptionAck is sent by the server to acknowledge a subscription
+message SubscriptionAck {
+  string target_id = 1;       // The target that was subscribed to
+  repeated string keys = 2;   // The keys that were subscribed to
+  bool split_by_metadata = 3; // Whether metrics will be split by metadata
+  bool success = 4;           // Whether the subscription was successful
+  string message = 5;         // Optional status message
+}
+
 // WebSocketMessage is the wrapper for all WebSocket messages
 message WebSocketMessage {
   oneof content {
     MetricsUpdate metrics_update = 1;
     SubscriptionMessage subscription = 2;
+    SubscriptionAck subscription_ack = 3;
   }
 }
