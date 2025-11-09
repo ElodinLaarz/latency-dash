@@ -1,0 +1,1142 @@
+# Implementation Guide - Latency Dashboard
+
+This guide provides step-by-step instructions for building the latency monitoring dashboard from scratch.
+
+## Prerequisites
+
+- **Go**: 1.21 or later
+- **Node.js**: 18.x or later
+- **npm** or **pnpm**: Latest version
+- **Git**: For version control
+
+## Phase 1: Backend Implementation (Go)
+
+### Step 1.1: Project Initialization
+
+```bash
+# Create project directory
+mkdir -p latency-dash/backend
+cd latency-dash/backend
+
+# Initialize Go module
+go mod init github.com/ElodinLaarz/latency-dash
+
+# Install dependencies
+go get github.com/gorilla/websocket
+go get google.golang.org/protobuf/proto
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+# Install protoc compiler (if not already installed)
+# macOS: brew install protobuf
+# Linux: apt-get install -y protobuf-compiler
+# Or download from: https://github.com/protocolbuffers/protobuf/releases
+```
+
+### Step 1.2: Project Structure Setup
+
+Create the following directory structure:
+
+```bash
+backend/
+├── main.go
+├── proto/
+│   └── latency.proto   # Protocol buffer schema
+├── pb/                 # Generated protobuf code
+│   └── latency.pb.go
+├── server/
+│   ├── hub.go          # WebSocket connection hub
+│   ├── client.go       # Individual client handler
+│   └── websocket.go    # WebSocket handlers
+└── generator/
+    └── events.go       # Event generator with payload
+```
+
+### Step 1.3: Create Protocol Buffer Schema (`proto/latency.proto`)
+
+**Purpose**: Define message structure for efficient binary serialization.
+
+**Create file**:
+```protobuf
+syntax = "proto3";
+
+package latency;
+
+option go_package = "github.com/ElodinLaarz/latency-dash/pb";
+
+message Event {
+    string target_id = 1;         // Target stream identifier
+    string key = 2;               // Service/component key
+    int64 server_timestamp = 3;   // Unix nanoseconds when server sent
+    bytes payload = 4;            // Random data for throughput testing
+    uint32 payload_size = 5;      // Size in bytes
+}
+
+message InitMessage {
+    string message = 1;
+    int64 server_time = 2;
+    repeated string available_targets = 3;  // List of targets client can subscribe to
+}
+
+message SubscriptionMessage {
+    enum Action {
+        SUBSCRIBE = 0;
+        UNSUBSCRIBE = 1;
+    }
+    Action action = 1;
+    string target_id = 2;
+}
+```
+
+**Generate Go code**:
+```bash
+mkdir -p pb
+protoc --go_out=. --go_opt=paths=source_relative \
+    proto/latency.proto
+```
+
+This creates `pb/latency.pb.go` with generated types.
+
+**Why Protocol Buffers?**
+- 30-50% smaller than JSON
+- Faster serialization/deserialization
+- Strongly typed schema
+- Better for throughput testing with payloads
+
+### Step 1.4: Implement WebSocket Hub (`server/hub.go`)
+
+**Purpose**: Manages all connected clients and broadcasts messages.
+
+**Key responsibilities**:
+- Maintain registry of active clients
+- Handle client registration/unregistration
+- Broadcast messages to all clients
+
+**Implementation details**:
+```go
+type Hub struct {
+    clients    map[*Client]bool
+    broadcast  chan []byte
+    register   chan *Client
+    unregister chan *Client
+    mu         sync.RWMutex
+}
+```
+
+**Core logic**:
+- Run infinite loop in goroutine
+- Listen on three channels: register, unregister, broadcast
+- When broadcasting, iterate over all clients and send message
+- Remove client on send failure
+
+### Step 1.4: Implement Client Handler (`server/client.go`)
+
+**Purpose**: Represents individual WebSocket connection.
+
+**Key responsibilities**:
+- Read messages from client (ping/pong, etc.)
+- Write messages to client
+- Handle connection cleanup
+
+**Implementation details**:
+```go
+type Client struct {
+    hub  *Hub
+    conn *websocket.Conn
+    send chan []byte
+}
+```
+
+**Two goroutines per client**:
+1. **readPump**: Reads from WebSocket, handles pings
+2. **writePump**: Writes from send channel to WebSocket
+
+**Connection health**:
+- Set read/write deadlines
+- Implement ping/pong for keepalive
+- Close connection on error
+
+### Step 1.5: Implement WebSocket Handler (`server/websocket.go`)
+
+**Purpose**: HTTP handler that upgrades connection to WebSocket.
+
+**Implementation**:
+```go
+var upgrader = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+    CheckOrigin: func(r *http.Request) bool {
+        return true // Allow all origins for development
+    },
+}
+
+func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
+    conn, err := upgrader.Upgrade(w, r, nil)
+    // ... handle upgrade
+    // Create client, register with hub
+    // Start read/write pumps
+}
+```
+
+### Step 1.6: Implement Multi-Target Event Generator (`generator/events.go`)
+
+**Purpose**: Generates random keyed events with payloads for multiple targets in parallel.
+
+**Configuration**:
+```go
+type TargetConfig struct {
+    TargetID       string         // Target identifier (e.g., "prod-us-east")
+    Keys           []string       // Service keys for this target
+    MinInterval    time.Duration  // Min time between events
+    MaxInterval    time.Duration  // Max time between events
+    MinPayloadSize uint32         // Min random payload bytes
+    MaxPayloadSize uint32         // Max random payload bytes
+}
+
+type GeneratorConfig struct {
+    Targets []TargetConfig  // Multiple targets to generate events for
+}
+```
+
+**Logic** (one goroutine per target):
+```go
+import (
+    "math/rand"
+    "time"
+    "google.golang.org/protobuf/proto"
+    pb "github.com/ElodinLaarz/latency-dash/pb"
+)
+
+func Start(cfg GeneratorConfig, hub *Hub) {
+    // Start a generator for each target
+    for _, targetCfg := range cfg.Targets {
+        go startTargetGenerator(targetCfg, hub)
+    }
+}
+
+func startTargetGenerator(cfg TargetConfig, hub *Hub) {
+    rand.Seed(time.Now().UnixNano())
+    
+    for {
+        // 1. Select random key
+        key := cfg.Keys[rand.Intn(len(cfg.Keys))]
+        
+        // 2. Calculate random interval
+        minNS := cfg.MinInterval.Nanoseconds()
+        maxNS := cfg.MaxInterval.Nanoseconds()
+        intervalNS := minNS + rand.Int63n(maxNS-minNS)
+        
+        // 3. Sleep for that interval
+        time.Sleep(time.Duration(intervalNS) * time.Nanosecond)
+        
+        // 4. Generate random payload
+        payloadSize := cfg.MinPayloadSize + 
+                      uint32(rand.Intn(int(cfg.MaxPayloadSize - cfg.MinPayloadSize)))
+        payload := make([]byte, payloadSize)
+        rand.Read(payload)  // Fill with random data
+        
+        // 5. Create protobuf event WITH target_id
+        event := &pb.Event{
+            TargetId:        cfg.TargetID,  // Include target
+            Key:             key,
+            ServerTimestamp: time.Now().UnixNano(),
+            Payload:         payload,
+            PayloadSize:     payloadSize,
+        }
+        
+        // 6. Marshal to protobuf binary
+        data, err := proto.Marshal(event)
+        if err != nil {
+            log.Printf("Failed to marshal event for target %s: %v", cfg.TargetID, err)
+            continue
+        }
+        
+        // 7. Send to hub with target info
+        hub.BroadcastToTarget(cfg.TargetID, data)
+    }
+}
+```
+
+**Message format** (binary protobuf):
+- Not human-readable (binary format)
+- Contains: key, server_timestamp, payload (random bytes), payload_size
+- Sent as WebSocket binary frame
+
+### Step 1.7: Main Server (`main.go`)
+
+**Purpose**: Entry point that wires everything together.
+
+**Steps**:
+1. Create and start Hub
+2. Configure event generator with keys
+3. Start event generator
+4. Set up HTTP routes:
+   - `GET /` - Serve frontend (static files or proxy)
+   - `GET /ws` - WebSocket endpoint
+   - `GET /health` - Health check
+5. Start HTTP server
+
+**Example** (Multi-Target):
+```go
+func main() {
+    hub := server.NewHub()
+    go hub.Run()
+
+    // Configure multiple targets with different characteristics
+    targets := []generator.TargetConfig{
+        {
+            TargetID:       "prod-us-east",
+            Keys:           []string{"api", "auth", "db", "cache"},
+            MinInterval:    100 * time.Millisecond,
+            MaxInterval:    2 * time.Second,
+            MinPayloadSize: 100,
+            MaxPayloadSize: 5000,
+        },
+        {
+            TargetID:       "prod-eu-west",
+            Keys:           []string{"api", "auth", "db", "cache"},
+            MinInterval:    150 * time.Millisecond,
+            MaxInterval:    3 * time.Second,
+            MinPayloadSize: 200,
+            MaxPayloadSize: 8000,
+        },
+        {
+            TargetID:       "staging",
+            Keys:           []string{"api", "auth", "db"},
+            MinInterval:    200 * time.Millisecond,
+            MaxInterval:    5 * time.Second,
+            MinPayloadSize: 100,
+            MaxPayloadSize: 3000,
+        },
+    }
+
+    generator.Start(generator.GeneratorConfig{
+        Targets: targets,
+    }, hub)
+
+    http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+        server.ServeWS(hub, w, r)
+    })
+    http.HandleFunc("/health", healthHandler)
+    
+    // Serve frontend static files
+    fs := http.FileServer(http.Dir("../frontend/dist"))
+    http.Handle("/", fs)
+
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+### Step 1.8: Testing Backend
+
+**Manual test**:
+1. Start server: `go run main.go`
+2. Use websocat or browser console:
+   ```javascript
+   const ws = new WebSocket('ws://localhost:8080/ws');
+   ws.onmessage = (e) => console.log(JSON.parse(e.data));
+   ```
+3. Verify events are received
+
+**Automated tests**:
+- Test Hub broadcast logic
+- Test Client lifecycle
+- Test event generator frequency
+
+---
+
+## Phase 2: Frontend Implementation (React + TypeScript)
+
+### Step 2.1: Project Initialization
+
+```bash
+cd latency-dash
+npm create vite@latest frontend -- --template react-ts
+cd frontend
+npm install
+```
+
+### Step 2.2: Install Dependencies
+
+```bash
+# Core dependencies
+npm install @tanstack/react-table lucide-react
+
+# Protocol Buffers
+npm install protobufjs
+npm install -D protobufjs-cli
+
+# Animations
+npm install framer-motion
+
+# Styling
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+
+# Optional: for better date/time handling
+npm install date-fns
+```
+
+### Step 2.3: Generate Protobuf Code for Frontend
+
+**Copy proto file from backend**:
+```bash
+mkdir -p src/proto
+cp ../backend/proto/latency.proto src/proto/
+```
+
+**Generate TypeScript types**:
+```bash
+npx pbjs -t static-module -w es6 --no-verify --no-delimited --no-convert \
+  -o src/proto/latency.js src/proto/latency.proto
+
+npx pbts -o src/proto/latency.d.ts src/proto/latency.js
+```
+
+This creates:
+- `src/proto/latency.js` - Runtime code
+- `src/proto/latency.d.ts` - TypeScript definitions
+
+### Step 2.3: Configure TailwindCSS
+
+**`tailwind.config.js`**:
+```javascript
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+```
+
+**`src/index.css`**:
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+### Step 2.4: Define TypeScript Types (`src/types/index.ts`)
+
+```typescript
+// Import generated protobuf types
+import { Event } from '../proto/latency';
+
+export { Event };
+
+export interface KeyMetrics {
+  key: string;
+  lastTimestamp: number | null;           // Client receive time
+  lastServerTimestamp: number | null;     // Server send time
+  intervalLatencies: number[];            // Time between server sends
+  processingTimes: number[];              // Browser processing time
+  payloadSizes: number[];                 // Payload sizes
+  payloadTimestamps: number[];            // For throughput calculation
+  min: number;                            // Min interval latency
+  max: number;                            // Max interval latency
+  average: number;                        // Avg interval latency
+  p90: number;                            // 90th percentile
+  avgProcessingTime: number;              // Avg browser processing time
+  throughput: number;                     // Bytes per second
+  count: number;                          // Number of measurements
+  lastUpdate: number;                     // For UI animations
+  lastPayloadSize: number;                // Most recent payload
+}
+
+export interface WebSocketState {
+  connected: boolean;
+  messageCount: number;
+  error: string | null;
+}
+
+export interface UserSettings {
+  visibleColumns: Set<ColumnId>;
+  latencyThreshold: number;               // Max acceptable latency (ms)
+  thresholdWarningPercent: number;        // Warning threshold (80% default)
+}
+
+export type ColumnId = 
+  | 'key'
+  | 'min'
+  | 'max'
+  | 'avg'
+  | 'p90'
+  | 'processing'
+  | 'throughput'
+  | 'payload'
+  | 'count';
+```
+
+### Step 2.5: Implement Metrics Utilities (`src/utils/metrics.ts`)
+
+**Calculate P90**:
+```typescript
+export function calculateP90(latencies: number[]): number {
+  if (latencies.length === 0) return 0;
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const index = Math.floor(sorted.length * 0.9);
+  return sorted[Math.max(0, index - 1)];
+}
+```
+
+**Calculate Throughput**:
+```typescript
+export function calculateThroughput(
+  payloadSizes: number[],
+  timestamps: number[],
+  windowMs: number = 10000  // 10 second window
+): number {
+  if (payloadSizes.length === 0) return 0;
+  
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  
+  let totalBytes = 0;
+  let oldestTimestamp = now;
+  
+  for (let i = timestamps.length - 1; i >= 0; i--) {
+    if (timestamps[i] < cutoff) break;
+    totalBytes += payloadSizes[i];
+    oldestTimestamp = timestamps[i];
+  }
+  
+  const timeSpanMs = now - oldestTimestamp;
+  if (timeSpanMs === 0) return 0;
+  
+  return (totalBytes / timeSpanMs) * 1000;  // Bytes per second
+}
+
+export function formatThroughput(bytesPerSecond: number): string {
+  if (bytesPerSecond < 1024) {
+    return `${bytesPerSecond.toFixed(0)} B/s`;
+  }
+  if (bytesPerSecond < 1024 * 1024) {
+    return `${(bytesPerSecond / 1024).toFixed(2)} KiB/s`;
+  } 
+  return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MiB/s`;
+}
+```
+
+**Color Coding**:
+```typescript
+export function getLatencyColor(
+  latency: number,
+  threshold: number,
+  warningPercent: number = 80
+): string {
+  const warningThreshold = threshold * (warningPercent / 100);
+  
+  if (latency <= warningThreshold) {
+    return 'text-green-600';
+  } 
+  if (latency <= threshold) {
+    return 'text-yellow-600';
+  } 
+  return 'text-red-600';
+}
+```
+
+**Update metrics** (comprehensive):
+```typescript
+export function updateMetrics(
+  current: KeyMetrics,
+  newIntervalLatency: number,
+  newProcessingTime: number,
+  newPayloadSize: number,
+  timestamp: number
+): KeyMetrics {
+  // Add to histories
+  const intervalLatencies = [...current.intervalLatencies, newIntervalLatency];
+  const processingTimes = [...current.processingTimes, newProcessingTime];
+  const payloadSizes = [...current.payloadSizes, newPayloadSize];
+  const payloadTimestamps = [...current.payloadTimestamps, timestamp];
+  
+  // Maintain fixed size
+  const maxHistory = 1000;
+  if (intervalLatencies.length > maxHistory) {
+    intervalLatencies.shift();
+    processingTimes.shift();
+    payloadSizes.shift();
+    payloadTimestamps.shift();
+  }
+
+  const count = current.count + 1;
+  const min = Math.min(current.min, newIntervalLatency);
+  const max = Math.max(current.max, newIntervalLatency);
+  const average = (current.average * current.count + newIntervalLatency) / count;
+  const avgProcessingTime = (current.avgProcessingTime * current.count + newProcessingTime) / count;
+  const p90 = calculateP90(intervalLatencies);
+  const throughput = calculateThroughput(payloadSizes, payloadTimestamps);
+
+  return {
+    ...current,
+    intervalLatencies,
+    processingTimes,
+    payloadSizes,
+    payloadTimestamps,
+    min,
+    max,
+    average,
+    p90,
+    avgProcessingTime,
+    throughput,
+    count,
+    lastUpdate: Date.now(),
+    lastPayloadSize: newPayloadSize,
+  };
+}
+```
+
+### Step 2.6: Implement WebSocket Hook (`src/hooks/useWebSocket.ts`)
+
+**Purpose**: Manages WebSocket connection and state.
+
+**Features**:
+- Auto-connect on mount
+- Auto-reconnect on disconnect
+- Exponential backoff for reconnection
+- Message handling
+- Connection state management
+
+**Key implementation**:
+```typescript
+export function useWebSocket(url: string) {
+  const [ws, setWS] = useState<WebSocket | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [messageCount, setMessageCount] = useState(0);
+  const reconnectAttempt = useRef(0);
+  const reconnectTimeout = useRef<NodeJS.Timeout>();
+
+  const connect = useCallback(() => {
+    const socket = new WebSocket(url);
+    
+    socket.onopen = () => {
+      setConnected(true);
+      reconnectAttempt.current = 0;
+    };
+
+    socket.onclose = () => {
+      setConnected(false);
+      // Exponential backoff reconnection
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 30000);
+      reconnectTimeout.current = setTimeout(() => {
+        reconnectAttempt.current++;
+        connect();
+      }, delay);
+    };
+
+    socket.onmessage = (event) => {
+      setMessageCount(prev => prev + 1);
+      const message: EventMessage = JSON.parse(event.data);
+      // Emit message via callback
+    };
+
+    setWS(socket);
+  }, [url]);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
+      ws?.close();
+    };
+  }, []);
+
+  return { connected, messageCount, ws };
+}
+```
+
+### Step 2.7: Implement Latency Table (`src/components/LatencyTable.tsx`)
+
+**Purpose**: Display sortable table of metrics.
+
+**TanStack Table setup**:
+```typescript
+const columns: ColumnDef<KeyMetrics>[] = [
+  {
+    accessorKey: 'key',
+    header: 'Key',
+    cell: info => info.getValue(),
+  },
+  {
+    accessorKey: 'min',
+    header: 'Min (ms)',
+    cell: info => Math.round(info.getValue() as number),
+  },
+  {
+    accessorKey: 'max',
+    header: 'Max (ms)',
+    cell: info => Math.round(info.getValue() as number),
+  },
+  {
+    accessorKey: 'average',
+    header: 'Avg (ms)',
+    cell: info => Math.round(info.getValue() as number),
+  },
+  {
+    accessorKey: 'p90',
+    header: 'P90 (ms)',
+    cell: info => Math.round(info.getValue() as number),
+  },
+  {
+    accessorKey: 'count',
+    header: 'Count',
+    cell: info => info.getValue(),
+  },
+];
+```
+
+**Sorting state**:
+```typescript
+const [sorting, setSorting] = useState<SortingState>([]);
+
+const table = useReactTable({
+  data: metricsArray,
+  columns,
+  state: { sorting },
+  onSortingChange: setSorting,
+  getCoreRowModel: getCoreRowModel(),
+  getSortedRowModel: getSortedRowModel(),
+});
+```
+
+**Render with highlighting**:
+```typescript
+// Check if row was recently updated
+const isRecent = (row: KeyMetrics) => {
+  return Date.now() - row.lastUpdate < 2000; // 2 seconds
+};
+
+// Apply CSS class for recent updates
+<tr className={isRecent(row.original) ? 'bg-blue-50' : ''}>
+```
+
+### Step 2.8: Implement Connection Status (`src/components/ConnectionStatus.tsx`)
+
+**Purpose**: Display WebSocket connection state.
+
+**Features**:
+- Green dot when connected
+- Red dot when disconnected
+- Message counter
+- Optional: reconnection attempts display
+
+```typescript
+export function ConnectionStatus({ connected, messageCount }: Props) {
+  return (
+    <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2">
+        <div className={`w-3 h-3 rounded-full ${
+          connected ? 'bg-green-500' : 'bg-red-500'
+        }`} />
+        <span className="text-sm">
+          {connected ? 'Connected' : 'Disconnected'}
+        </span>
+      </div>
+      <span className="text-sm text-gray-600">
+        Messages: {messageCount.toLocaleString()}
+      </span>
+    </div>
+  );
+}
+```
+
+### Step 2.9: Wire Up Main App (`src/App.tsx`)
+
+**State management**:
+```typescript
+const [metrics, setMetrics] = useState<Map<string, KeyMetrics>>(new Map());
+
+const handleMessage = useCallback((message: EventMessage) => {
+  if (message.type !== 'event') return;
+
+  const { key, timestamp } = message.data;
+
+  setMetrics(prev => {
+    const current = prev.get(key) || {
+      key,
+      lastTimestamp: null,
+      latencies: [],
+      min: Infinity,
+      max: 0,
+      average: 0,
+      p90: 0,
+      count: 0,
+      lastUpdate: Date.now(),
+    };
+
+    // Calculate latency if we have a previous timestamp
+    if (current.lastTimestamp !== null) {
+      const latency = timestamp - current.lastTimestamp;
+      const updated = updateMetrics(current, latency);
+      updated.lastTimestamp = timestamp;
+      
+      const next = new Map(prev);
+      next.set(key, updated);
+      return next;
+    } 
+    // First message for this key
+    const next = new Map(prev);
+    next.set(key, { ...current, lastTimestamp: timestamp });
+    return next;
+  });
+}, []);
+```
+
+**Render**:
+```typescript
+function App() {
+  const { connected, messageCount } = useWebSocket('ws://localhost:8080/ws', handleMessage);
+  
+  return (
+    <div className="container mx-auto p-4">
+      <header className="mb-6">
+        <h1 className="text-3xl font-bold">Latency Monitor</h1>
+        <ConnectionStatus connected={connected} messageCount={messageCount} />
+      </header>
+      
+      <LatencyTable metrics={Array.from(metrics.values())} />
+    </div>
+  );
+}
+```
+
+### Step 2.10: Configure Vite for WebSocket Proxy (`vite.config.ts`)
+
+**For development** (avoids CORS issues):
+```typescript
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
+      },
+    },
+  },
+});
+```
+
+### Step 2.11: Testing Frontend
+
+**Development**:
+```bash
+npm run dev
+```
+
+**Build for production**:
+```bash
+npm run build
+```
+
+**Manual testing checklist**:
+- [ ] Table displays metrics
+- [ ] Sorting works for each column
+- [ ] Recent updates are highlighted
+- [ ] Connection status shows correctly
+- [ ] Metrics update in real-time
+- [ ] Reconnection works after disconnect
+
+---
+
+## Phase 3: Integration & Polish
+
+### Step 3.1: Production Build Setup
+
+**Backend changes** to serve frontend:
+```go
+// In main.go
+func main() {
+    // ... hub and generator setup
+
+    // Serve frontend static files
+    fs := http.FileServer(http.Dir("../frontend/dist"))
+    http.Handle("/", fs)
+    
+    // WebSocket must be registered before catch-all
+    http.HandleFunc("/ws", wsHandler)
+    
+    log.Println("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+**Build script** (`build.sh`):
+```bash
+#!/bin/bash
+set -e
+
+echo "Building frontend..."
+cd frontend
+npm run build
+cd ..
+
+echo "Building backend..."
+cd backend
+go build -o ../latency-dash
+cd ..
+
+echo "Build complete! Run ./latency-dash to start"
+```
+
+### Step 3.2: Add Environment Configuration
+
+**Backend** (`backend/config.go`):
+```go
+type Config struct {
+    Port        string
+    NumKeys     int
+    MinInterval time.Duration
+    MaxInterval time.Duration
+}
+
+func LoadConfig() Config {
+    return Config{
+        Port:        getEnv("PORT", "8080"),
+        NumKeys:     getEnvInt("NUM_KEYS", 15),
+        MinInterval: getEnvDuration("MIN_INTERVAL", "100ms"),
+        MaxInterval: getEnvDuration("MAX_INTERVAL", "5s"),
+    }
+}
+```
+
+**Frontend** (`.env`):
+```env
+VITE_WS_URL=ws://localhost:8080/ws
+```
+
+### Step 3.3: Add Logging
+
+**Backend**:
+- Log client connections/disconnections
+- Log message broadcast errors
+- Log generator events (at debug level)
+
+**Frontend**:
+- Console log connection events
+- Console error on WebSocket errors
+- Optional: Send errors to error tracking service
+
+### Step 3.4: Error Handling
+
+**Backend**:
+- Graceful shutdown on SIGINT/SIGTERM
+- Recover from panics in goroutines
+- Handle client disconnection gracefully
+
+**Frontend**:
+- Display error messages to user
+- Retry logic with user feedback
+- Handle malformed messages gracefully
+
+### Step 3.5: Performance Optimization
+
+**Backend**:
+- Add rate limiting for broadcast if needed
+- Consider buffered channels for high throughput
+- Profile with pprof under load
+
+**Frontend**:
+- Debounce rapid state updates
+- Use React.memo for table rows
+- Consider virtualization for 100+ keys
+- Limit history array size (already done)
+
+### Step 3.6: Documentation
+
+Create comprehensive README:
+
+**README.md**:
+```markdown
+# Latency Dashboard
+
+Real-time latency monitoring dashboard with WebSocket-based updates.
+
+## Quick Start
+
+### Development
+Terminal 1 (Backend):
+cd backend
+go run main.go
+
+Terminal 2 (Frontend):
+cd frontend
+npm install
+npm run dev
+
+### Production
+./build.sh
+./latency-dash
+
+Open http://localhost:8080
+
+## Configuration
+
+Environment variables:
+- PORT: Server port (default: 8080)
+- NUM_KEYS: Number of unique keys (default: 15)
+- MIN_INTERVAL: Min time between events (default: 100ms)
+- MAX_INTERVAL: Max time between events (default: 5s)
+
+## Features
+
+- Real-time latency tracking
+- Sortable columns
+- Min, Max, Average, P90 metrics
+- Visual indicators for recent updates
+- Auto-reconnection
+
+## Architecture
+
+See DESIGN.md for detailed architecture documentation.
+```
+
+### Step 3.7: Testing Checklist
+
+**Functional Tests**:
+- [ ] Backend starts without errors
+- [ ] Frontend connects to backend
+- [ ] Events are generated correctly
+- [ ] Latency calculations are accurate
+- [ ] Sorting works for all columns
+- [ ] Recent update highlighting works
+- [ ] Connection status reflects reality
+- [ ] Reconnection works after server restart
+
+**Performance Tests**:
+- [ ] 10 concurrent clients supported
+- [ ] 100+ keys displayed without lag
+- [ ] High-frequency events (100ms) work smoothly
+- [ ] Memory usage stable over 1 hour
+- [ ] No memory leaks detected
+
+**Edge Cases**:
+- [ ] First message for key (no latency yet)
+- [ ] Server restart during connection
+- [ ] Multiple rapid disconnects/reconnects
+- [ ] Very high latency values (>1 minute)
+- [ ] Very low latency values (<1ms)
+
+---
+
+## Phase 4: Optional Enhancements
+
+### 4.1: Add Persistence
+
+**SQLite integration**:
+- Store all events in database
+- Query historical data
+- Add API endpoints for history retrieval
+
+### 4.2: Add Charts
+
+**Libraries**: Recharts or Chart.js
+
+**Features**:
+- Line chart showing latency over time per key
+- Histogram of latency distribution
+- Toggle between table and chart view
+
+### 4.3: Add Filtering
+
+**Features**:
+- Search/filter by key name
+- Filter by latency threshold
+- Show only active keys (recent activity)
+
+### 4.4: Add Alerting
+
+**Features**:
+- Configure threshold per key
+- Visual alert when threshold exceeded
+- Browser notification support
+- Webhook integration for external alerts
+
+### 4.5: Docker Setup
+
+**Dockerfile** (multi-stage):
+```dockerfile
+# Frontend build
+FROM node:18 AS frontend
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# Backend build
+FROM golang:1.21 AS backend
+WORKDIR /app
+COPY backend/go.* ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -o latency-dash
+
+# Final image
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=backend /app/latency-dash .
+COPY --from=frontend /app/frontend/dist ./frontend/dist
+EXPOSE 8080
+CMD ["./latency-dash"]
+```
+
+**docker-compose.yml**:
+```yaml
+version: '3.8'
+services:
+  latency-dash:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - NUM_KEYS=20
+      - MIN_INTERVAL=100ms
+      - MAX_INTERVAL=5s
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**Issue**: WebSocket connection fails
+- **Solution**: Check CORS settings, verify URL, check firewall
+
+**Issue**: Metrics not updating
+- **Solution**: Check browser console for errors, verify message format
+
+**Issue**: High memory usage
+- **Solution**: Reduce MAX_HISTORY in metrics calculation, limit active keys
+
+**Issue**: Sort order incorrect
+- **Solution**: Verify TanStack Table sorting configuration
+
+**Issue**: Build fails
+- **Solution**: Check Go/Node versions, run `go mod tidy` and `npm install`
+
+---
+
+## Next Steps
+
+After completing this implementation:
+
+1. **Test thoroughly** with real-world scenarios
+2. **Monitor performance** under load
+3. **Gather user feedback** on UI/UX
+4. **Plan Phase 4** enhancements based on needs
+5. **Document** any issues or learnings
+
+For questions or issues, refer to:
+- DESIGN.md for architecture details
+- Go documentation: https://golang.org/doc/
+- React documentation: https://react.dev/
+- TanStack Table: https://tanstack.com/table/
