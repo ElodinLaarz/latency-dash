@@ -708,28 +708,132 @@ interface Config {
 
 ## Testing Strategy
 
-### Backend Tests
-- Unit tests for event generator
-- WebSocket broadcast logic
-- Connection management (connect/disconnect)
-- Load testing (many clients, high frequency)
+> **📋 See [TESTING_GUIDE.md](./TESTING_GUIDE.md) for comprehensive testing details**
 
-### Frontend Tests
-- Unit tests for metric calculations
-- WebSocket reconnection logic
-- Sorting algorithm correctness
-- Component rendering tests (React Testing Library)
+### Testing Approach
+
+**Incremental Testing**: Test each feature as it's built, layer by layer
+
+1. **Unit Tests** - Individual components in isolation
+2. **Integration Tests** - Components working together  
+3. **E2E Tests** - Complete user workflows
+4. **Manual UI Tests** - Visual behavior and UX
+
+### Backend Tests (Go)
+
+**Protobuf**:
+- Event/MetricsUpdate serialization
+- Metadata map preservation
+
+**Event Generator**:
+- Metadata generation (tier, region)
+- Metadata affects latency (free 1.5×, enterprise 0.7×)
+- Metadata affects payload (enterprise 2×)
+
+**Metrics Calculator**:
+- Metrics key generation (split vs combined)
+- Interval latency calculation
+- P90/min/max/avg correctness
+- Circular buffer (max 1000 entries)
+- Throughput calculation
+- Split mode: separate rows per metadata
+- Combined mode: aggregated rows
+
+**Target Monitor**:
+- Subscription tracking
+- Timeout cleanup (after 5min inactive)
+- Resubscribe within timeout preserves metrics
+- Multiple clients with different split preferences
+
+**Concurrency**:
+- Race condition testing (`-race` flag)
+- Thread-safe metrics updates
+
+### Frontend Tests (TypeScript/React)
+
+**Protobuf**:
+- MetricsUpdate decoding
+- SubscriptionMessage encoding
+
+**UI Components**:
+- Metrics table renders all rows
+- Split mode shows metadata column
+- Combined mode hides metadata
+- Expandable rows show full metadata
+- Column sorting (ascending/descending)
+- Color coding by threshold (green/yellow/red)
+- Recent update flash animation
+- Throughput formatting (KiB/s, MiB/s)
+
+**Split/Combined Toggle**:
+- Toggle switches state
+- Sends subscription message on change
+- UI updates correctly
+
+**State Management**:
+- Metrics update state correctly
+- Split metadata into separate rows
+- Combined aggregates rows
 
 ### Integration Tests
-- End-to-end message flow
-- Multi-client scenarios
-- Network disruption handling
-- Data consistency verification
+
+**End-to-End**:
+- Event → Calculator → Client pipeline
+- Multiple clients receive consistent metrics
+- Split clients get separate rows, combined get aggregated
+- Timeout persistence (reconnect within timeout)
+
+**Multi-Client**:
+- 10+ simultaneous clients
+- Different split preferences work concurrently
+- No data inconsistencies
+
+**Performance**:
+- 100+ keys handled smoothly
+- 10+ events/sec sustained
+- UI remains responsive
+
+### Manual UI Testing Checklist
+
+**Visual Behavior**:
+- [ ] Rows flash on update (blue pulse, 500ms)
+- [ ] Sorted column has arrow indicator
+- [ ] Color coding: green → yellow → red
+- [ ] Expand arrow (►/▼) shows/hides metadata
+- [ ] Animations smooth (300ms ease-out)
+- [ ] Numbers format correctly (2 decimals)
+- [ ] Connection status indicator updates
+
+**Interactions**:
+- [ ] Toggle switches between split/combined
+- [ ] Click header sorts table
+- [ ] Click expand shows metadata details
+- [ ] Multiple expansions work simultaneously
+
+**Performance**:
+- [ ] No lag with 100+ rows
+- [ ] Smooth with 10+ events/sec
+- [ ] Memory stable over 10+ minutes
 
 ## Success Metrics
-- WebSocket connection stability (>99% uptime)
-- UI responsiveness (<100ms for sort operations)
-- Accurate latency calculations (verified against known data)
-- Supports 10+ simultaneous clients
-- Handles 100+ keys efficiently
-- Memory usage stable over 24hr operation
+
+### Correctness
+- ✅ Metrics match backend calculations (verified against test data)
+- ✅ P90 calculation accurate (tested with known datasets)
+- ✅ Split/combined modes produce expected results
+- ✅ Metadata sorting deterministic (alphabetical)
+
+### Performance
+- ✅ WebSocket connection stability (>99% uptime)
+- ✅ UI responsiveness (<100ms for sort operations)
+- ✅ Supports 10+ simultaneous clients
+- ✅ Handles 100+ keys efficiently
+- ✅ Memory usage stable over 24hr operation
+
+### Code Quality
+- ✅ Backend test coverage >80%
+- ✅ Frontend test coverage >70%
+- ✅ Critical paths 100% covered (metrics calc, protobuf)
+- ✅ No race conditions (verified with `-race` flag)
+- ✅ All unit tests pass
+- ✅ All integration tests pass
