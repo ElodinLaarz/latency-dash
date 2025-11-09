@@ -12,10 +12,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	testTargetID = "test-target"
+	testKey      = "test-key"
+	testTier     = "test"
+	
+	numWorkers       = 10
+	eventsPerWorker = 10
+	
+	// Time constants
+	shortWait = 100 * time.Millisecond
+	longWait  = 500 * time.Millisecond
+)
+
 // createTestEvent creates a standard test event for calculator tests
 func createTestEvent(targetID, key string, metadata map[string]string) *proto.Event {
 	if metadata == nil {
-		metadata = map[string]string{"tier": "test"}
+		metadata = map[string]string{"tier": testTier}
 	}
 
 	return &proto.Event{
@@ -34,22 +47,22 @@ func TestMetricsUpdate(t *testing.T) {
 	defer calc.Stop()
 
 	// Create a test event
-	event := createTestEvent("test-target", "test-key", map[string]string{"tier": "test"})
+	event := createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier})
 
 	// Process the event
 	calc.ProcessEvent(event)
 
 	// Give the calculator a moment to process the event
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(shortWait)
 
 	// Verify metrics were calculated
 	calc.metricsMu.RLock()
 	defer calc.metricsMu.RUnlock()
 
 	// The key should be in the format "target:key:metadata"
-	key := "test-target:test-key"
+	key := testTargetID + ":" + testKey
 	for k := range calc.metrics {
-		if k == key || k == key+":tier=test" {
+		if k == key || k == key+":tier="+testTier {
 			metrics := calc.metrics[k]
 			assert.Equal(t, int64(1), metrics.GetCount(), "Should have 1 sample")
 			return
@@ -81,7 +94,7 @@ func TestMetricsCalculation(t *testing.T) {
 	}
 
 	// Give the calculator time to process events
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(longWait)
 
 	// Verify metrics
 	calc.metricsMu.RLock()
@@ -154,7 +167,7 @@ func TestMetricsEdgeCases(t *testing.T) {
 		{
 			name: "single_event",
 			events: []*proto.Event{
-				createTestEvent("test-target", "test-key", map[string]string{"tier": "test"}),
+				createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier}),
 			},
 			expected: func(t *testing.T, metrics *Metrics) {
 				assert.Equal(t, int64(1), metrics.GetCount())
@@ -168,10 +181,10 @@ func TestMetricsEdgeCases(t *testing.T) {
 		{
 			name: "two_events_same_time",
 			events: []*proto.Event{
-				createTestEvent("test-target", "test-key", map[string]string{"tier": "test"}),
+				createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier}),
 				func() *proto.Event {
 					// Create event with same timestamp
-					event := createTestEvent("test-target", "test-key", map[string]string{"tier": "test"})
+					event := createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier})
 					event.ServerTimestamp = time.Now().UnixNano() // Same timestamp
 					return event
 				}(),
@@ -190,12 +203,12 @@ func TestMetricsEdgeCases(t *testing.T) {
 			name: "negative_interval_protection",
 			events: []*proto.Event{
 				func() *proto.Event {
-					event := createTestEvent("test-target", "test-key", map[string]string{"tier": "test"})
+					event := createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier})
 					event.ServerTimestamp = time.Now().Add(time.Second).UnixNano()
 					return event
 				}(),
 				func() *proto.Event {
-					event := createTestEvent("test-target", "test-key", map[string]string{"tier": "test"})
+					event := createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier})
 					event.ServerTimestamp = time.Now().UnixNano() // Earlier timestamp
 					return event
 				}(),
@@ -226,7 +239,7 @@ func TestMetricsEdgeCases(t *testing.T) {
 			}
 
 			// Give calculator time to process
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(shortWait)
 
 			// Find the metrics
 			calc.metricsMu.RLock()
@@ -257,7 +270,7 @@ func TestRingBufferBehavior(t *testing.T) {
 	// Use fewer events and ensure they're spaced out properly
 	const numEvents = 1200 // More than default MaxSamples (1000) but not too many
 	for i := 0; i < numEvents; i++ {
-		event := createTestEvent("test-target", "test-key", nil)
+		event := createTestEvent(testTargetID, testKey, nil)
 		event.ServerTimestamp = baseTime.Add(time.Duration(i*100) * time.Millisecond).UnixNano()
 		calc.ProcessEvent(event)
 		
@@ -268,7 +281,7 @@ func TestRingBufferBehavior(t *testing.T) {
 	}
 
 	// Give calculator more time to process all events
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(longWait)
 
 	// Verify metrics
 	calc.metricsMu.RLock()
@@ -307,23 +320,23 @@ func TestP90CalculationAccuracy(t *testing.T) {
 
 	// Add a single event first to establish baseline
 	event1 := &proto.Event{
-		TargetId:       "test-target",
-		Key:            "test-key",
+		TargetId:       testTargetID,
+		Key:            testKey,
 		ServerTimestamp: baseTime.UnixNano(),
 		Payload:        []byte("test"),
 		PayloadSize:     4,
-		Metadata:       map[string]string{"tier": "test"},
+		Metadata:       map[string]string{"tier": testTier},
 	}
 	metrics.Update(event1)
 
 	// Add a second event with a known interval
 	event2 := &proto.Event{
-		TargetId:       "test-target",
-		Key:            "test-key",
+		TargetId:       testTargetID,
+		Key:            testKey,
 		ServerTimestamp: baseTime.Add(100 * time.Millisecond).UnixNano(),
 		Payload:        []byte("test"),
 		PayloadSize:     4,
-		Metadata:       map[string]string{"tier": "test"},
+		Metadata:       map[string]string{"tier": testTier},
 	}
 	metrics.Update(event2)
 
@@ -350,16 +363,13 @@ func TestConcurrentAccess(t *testing.T) {
 	defer calc.Stop()
 
 	// Start multiple goroutines to simulate concurrent access
-	const numWorkers = 10
-	const eventsPerWorker = 10 // Reduced for faster test execution
-
 	var wg sync.WaitGroup
 	for i := range numWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < eventsPerWorker; j++ {
-				event := createTestEvent("test-target", fmt.Sprintf("key-%d", workerID), nil)
+				event := createTestEvent(testTargetID, fmt.Sprintf("key-%d", workerID), nil)
 				calc.ProcessEvent(event)
 			}
 		}(i)
@@ -369,7 +379,7 @@ func TestConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	// Give some time for events to be processed
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(longWait)
 
 	// Verify all events were processed
 	calc.metricsMu.RLock()

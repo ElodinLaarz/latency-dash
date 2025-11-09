@@ -13,6 +13,15 @@ import (
 const (
 	// MaxSamples is the maximum number of samples to keep for each key
 	MaxSamples = 1000
+	
+	// Time conversion constants
+	millisecondsToNanoseconds = int64(time.Millisecond)
+	
+	// P90Percentile is the percentile value for 90th percentile
+	P90Percentile = 90
+	
+	// NegativeIntervalClamp is the value to clamp negative intervals to
+	NegativeIntervalClamp = 0
 )
 
 type Metrics struct {
@@ -197,7 +206,7 @@ func (m *Metrics) Update(event *proto.Event) {
 			intervalMs = currentTimeMs - lastEventTimeMs
 			// Ensure interval is non-negative
 			if intervalMs < 0 {
-				intervalMs = 0
+				intervalMs = NegativeIntervalClamp
 			}
 		}
 	} else {
@@ -210,58 +219,58 @@ func (m *Metrics) Update(event *proto.Event) {
 	m.Samples.Value = currentTimeMs
 
 	// Convert interval to nanoseconds for atomic operations (storing as int64)
-	intervalNs := int64(intervalMs * float64(time.Millisecond))
+	intervalNs := int64(intervalMs * float64(millisecondsToNanoseconds))
 
-	// Update stats atomically
 	if count == 0 {
 		atomic.StoreInt64(&m.min, intervalNs)
 		atomic.StoreInt64(&m.max, intervalNs)
 		atomic.StoreInt64(&m.avg, intervalNs)
-	} else {
-		// Update min
-		for {
-			currentMin := atomic.LoadInt64(&m.min)
-			if intervalNs >= currentMin {
-				break
-			}
-			if atomic.CompareAndSwapInt64(&m.min, currentMin, intervalNs) {
-				break
-			}
-		}
+		atomic.AddInt64(&m.count, 1)
+		p90 := m.calculatePercentile(P90Percentile)
+		atomic.StoreInt64(&m.p90, int64(p90 * float64(time.Millisecond)))
+		return
+	}
 
-		// Update max
-		for {
-			currentMax := atomic.LoadInt64(&m.max)
-			if intervalNs <= currentMax {
-				break
-			}
-			if atomic.CompareAndSwapInt64(&m.max, currentMax, intervalNs) {
-				break
-			}
+	// Update min
+	for {
+		currentMin := atomic.LoadInt64(&m.min)
+		if intervalNs >= currentMin {
+			break
 		}
-
-		// Update average
-		for {
-			currentAvg := atomic.LoadInt64(&m.avg)
-			newAvg := (currentAvg*count + intervalNs) / (count + 1)
-			if atomic.CompareAndSwapInt64(&m.avg, currentAvg, newAvg) {
-				break
-			}
+		if atomic.CompareAndSwapInt64(&m.min, currentMin, intervalNs) {
+			break
 		}
 	}
 
-	// Increment count atomically
-	atomic.AddInt64(&m.count, 1)
+	// Update max
+	for {
+		currentMax := atomic.LoadInt64(&m.max)
+		if intervalNs <= currentMax {
+			break
+		}
+		if atomic.CompareAndSwapInt64(&m.max, currentMax, intervalNs) {
+			break
+		}
+	}
 
-	// Calculate P90
-	p90 := m.calculatePercentile(90)
+	// Update average
+	for {
+		currentAvg := atomic.LoadInt64(&m.avg)
+		newAvg := (currentAvg*count + intervalNs) / (count + 1)
+		if atomic.CompareAndSwapInt64(&m.avg, currentAvg, newAvg) {
+			break
+		}
+	}
+
+	atomic.AddInt64(&m.count, 1)
+	p90 := m.calculatePercentile(P90Percentile)
 	atomic.StoreInt64(&m.p90, int64(p90 * float64(time.Millisecond)))
 }
 
 func (m *Metrics) calculatePercentile(p float64) float64 {
 	count := atomic.LoadInt64(&m.count)
 	if count <= 1 {
-		return float64(atomic.LoadInt64(&m.avg)) / float64(time.Millisecond)
+		return float64(atomic.LoadInt64(&m.avg)) / float64(millisecondsToNanoseconds)
 	}
 
 	// Collect intervals from consecutive timestamps in the ring buffer
