@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Latency Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f5f7fa;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+
+    .header {
+      background: #3498db;
+      color: white;
+      padding: 20px 30px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      margin-bottom: 5px;
+    }
+
+    .status {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    .status.connected {
+      color: #2ecc71;
+    }
+
+    .status.disconnected {
+      color: #e74c3c;
+    }
+
+    .content {
+      padding: 30px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: #ecf0f1;
+    }
+
+    th {
+      padding: 15px;
+      text-align: left;
+      font-weight: 600;
+      color: #2c3e50;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+    }
+
+    th:hover {
+      background: #d5dbde;
+    }
+
+    th.sortable::after {
+      content: '↕';
+      position: absolute;
+      right: 10px;
+      opacity: 0.3;
+    }
+
+    th.sorted-asc::after {
+      content: '↑';
+      opacity: 1;
+    }
+
+    th.sorted-desc::after {
+      content: '↓';
+      opacity: 1;
+    }
+
+    td {
+      padding: 15px;
+      border-bottom: 1px solid #ecf0f1;
+      color: #34495e;
+    }
+
+    tr:hover {
+      background: #f8f9fa;
+    }
+
+    .metric {
+      font-family: 'Courier New', monospace;
+      font-weight: 600;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #7f8c8d;
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.5;
+      }
+    }
+
+    .updating {
+      animation: pulse 1s ease-in-out;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Latency Dashboard</h1>
+      <div class="status" id="status">Connecting...</div>
+    </div>
+    <div class="content">
+      <table id="latencyTable">
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="key">Key</th>
+            <th class="sortable" data-sort="count">Count</th>
+            <th class="sortable" data-sort="min">Min (ms)</th>
+            <th class="sortable" data-sort="max">Max (ms)</th>
+            <th class="sortable" data-sort="avg">Avg (ms)</th>
+            <th class="sortable" data-sort="p90">P90 (ms)</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr>
+            <td colspan="6" class="empty-state">
+              <div class="empty-state-icon">📊</div>
+              <div>Waiting for data...</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // Data structure to store latency information per key
+    const latencyData = new Map();
+    
+    // Current sort configuration
+    let currentSort = {
+      column: 'key',
+      direction: 'asc'
+    };
+
+    // WebSocket connection
+    let ws;
+    
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        updateStatus('Connected', true);
+        console.log('Connected to server');
+      };
+      
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'update') {
+          handleUpdate(message);
+        }
+      };
+      
+      ws.onclose = () => {
+        updateStatus('Disconnected', false);
+        console.log('Disconnected from server');
+        // Attempt to reconnect after 3 seconds
+        setTimeout(connect, 3000);
+      };
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+    }
+    
+    function updateStatus(text, connected) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = text;
+      statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
+    }
+    
+    function handleUpdate(message) {
+      const { key, timestamp } = message;
+      
+      if (!latencyData.has(key)) {
+        latencyData.set(key, {
+          key: key,
+          lastTimestamp: timestamp,
+          latencies: [],
+          count: 0,
+          min: 0,
+          max: 0,
+          avg: 0,
+          p90: 0
+        });
+      } else {
+        const data = latencyData.get(key);
+        const latency = timestamp - data.lastTimestamp;
+        
+        data.latencies.push(latency);
+        data.count++;
+        data.lastTimestamp = timestamp;
+        
+        // Calculate statistics
+        data.min = Math.min(...data.latencies);
+        data.max = Math.max(...data.latencies);
+        data.avg = Math.round(data.latencies.reduce((a, b) => a + b, 0) / data.latencies.length);
+        
+        // Calculate P90
+        const sorted = [...data.latencies].sort((a, b) => a - b);
+        const p90Index = Math.ceil(sorted.length * 0.9) - 1;
+        data.p90 = sorted[p90Index] || 0;
+      }
+      
+      renderTable();
+    }
+    
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      
+      // Get all data and sort it
+      const dataArray = Array.from(latencyData.values());
+      
+      // Filter out entries with no latencies yet
+      const validData = dataArray.filter(d => d.count > 0);
+      
+      if (validData.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" class="empty-state">
+              <div class="empty-state-icon">📊</div>
+              <div>Waiting for data...</div>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+      
+      // Sort data
+      validData.sort((a, b) => {
+        let aVal = a[currentSort.column];
+        let bVal = b[currentSort.column];
+        
+        // For string comparison
+        if (typeof aVal === 'string') {
+          return currentSort.direction === 'asc' 
+            ? aVal.localeCompare(bVal)
+            : bVal.localeCompare(aVal);
+        }
+        
+        // For numeric comparison
+        return currentSort.direction === 'asc' 
+          ? aVal - bVal
+          : bVal - aVal;
+      });
+      
+      // Build table HTML
+      tbody.innerHTML = validData.map(data => `
+        <tr>
+          <td>${data.key}</td>
+          <td class="metric">${data.count}</td>
+          <td class="metric">${data.min}</td>
+          <td class="metric">${data.max}</td>
+          <td class="metric">${data.avg}</td>
+          <td class="metric">${data.p90}</td>
+        </tr>
+      `).join('');
+    }
+    
+    function handleSort(column) {
+      if (currentSort.column === column) {
+        // Toggle direction
+        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+      } else {
+        // New column, default to ascending
+        currentSort.column = column;
+        currentSort.direction = 'asc';
+      }
+      
+      // Update header styling
+      document.querySelectorAll('th').forEach(th => {
+        th.classList.remove('sorted-asc', 'sorted-desc');
+      });
+      
+      const sortedHeader = document.querySelector(`th[data-sort="${column}"]`);
+      sortedHeader.classList.add(`sorted-${currentSort.direction}`);
+      
+      renderTable();
+    }
+    
+    // Set up sort handlers
+    document.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        handleSort(th.dataset.sort);
+      });
+    });
+    
+    // Set initial sort indicator
+    document.querySelector('th[data-sort="key"]').classList.add('sorted-asc');
+    
+    // Start connection
+    connect();
+  </script>
+</body>
+</html>

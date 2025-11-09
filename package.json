@@ -1,0 +1,17 @@
+{
+  "name": "latency-dash",
+  "version": "1.0.0",
+  "description": "A latency dashboard design.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.1.0",
+    "ws": "^8.18.3"
+  }
+}
