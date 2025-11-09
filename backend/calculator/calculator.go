@@ -2,6 +2,8 @@ package calculator
 
 import (
 	"container/ring"
+	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -19,9 +21,6 @@ const (
 
 	// P90Percentile is the percentile value for 90th percentile
 	P90Percentile = 90
-
-	// NegativeIntervalClamp is the value to clamp negative intervals to
-	NegativeIntervalClamp = 0
 )
 
 type Metrics struct {
@@ -73,9 +72,8 @@ type MetricsCalculator struct {
 	subscribers   map[chan *proto.MetricsUpdate]struct{}
 	subscribersMu sync.RWMutex
 
-	stopOnce sync.Once
-	stopped  bool
-	stopMu   sync.RWMutex
+	doOnce sync.Once
+	stopCh chan struct{}
 }
 
 func NewMetricsCalculator() *MetricsCalculator {
@@ -83,20 +81,76 @@ func NewMetricsCalculator() *MetricsCalculator {
 		metrics:     make(map[string]*Metrics),
 		updateCh:    make(chan *proto.Event, 1000),
 		subscribers: make(map[chan *proto.MetricsUpdate]struct{}),
+		stopCh:      make(chan struct{}),
 	}
 }
 
-func (c *MetricsCalculator) Start() {
-	go c.processEvents()
+// Start starts the metrics calculator, blocking until the calculator is stopped.
+func (c *MetricsCalculator) Start(ctx context.Context) error {
+	select {
+	case <-c.stopCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	fmt.Println("Starting metrics calculator...")
+	defer func() {
+		// Clean up resources when exiting
+		c.subscribersMu.Lock()
+		for ch := range c.subscribers {
+			close(ch)
+		}
+		c.subscribers = make(map[chan *proto.MetricsUpdate]struct{})
+		c.subscribersMu.Unlock()
+
+		// Clear metrics
+		c.metricsMu.Lock()
+		c.metrics = make(map[string]*Metrics)
+		c.metricsMu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-c.updateCh:
+			if !ok {
+				return nil
+			}
+			metrics := c.getOrCreateMetrics(event)
+			metrics.Update(event)
+
+			// Create and send update to subscribers
+			update := &proto.MetricsUpdate{
+				TargetId:    event.TargetId,
+				Key:         event.Key,
+				Min:         metrics.Min(),
+				Max:         metrics.Max(),
+				Avg:         metrics.Avg(),
+				P90:         metrics.P90(),
+				Count:       metrics.Count(),
+				LastUpdated: time.Now().UnixNano(),
+				Metadata:    event.Metadata,
+			}
+
+			c.notifySubscribers(update)
+		}
+	}
 }
 
-func (c *MetricsCalculator) ProcessEvent(event *proto.Event) {
-	c.stopMu.RLock()
-	defer c.stopMu.RUnlock()
-	if c.stopped {
-		return
+func (c *MetricsCalculator) ProcessEvent(event *proto.Event) error {
+	select {
+	case c.updateCh <- event:
+		return nil
+	case <-c.stopCh:
+		return fmt.Errorf("calculator is stopping")
+	default:
+		return fmt.Errorf("event queue full")
 	}
-	c.updateCh <- event
 }
 
 func (c *MetricsCalculator) Subscribe() chan *proto.MetricsUpdate {
@@ -109,40 +163,53 @@ func (c *MetricsCalculator) Subscribe() chan *proto.MetricsUpdate {
 
 func (c *MetricsCalculator) Unsubscribe(ch chan *proto.MetricsUpdate) {
 	c.subscribersMu.Lock()
+	defer c.subscribersMu.Unlock()
 	delete(c.subscribers, ch)
 	close(ch)
-	c.subscribersMu.Unlock()
 }
 
+// Stop shuts down the metrics calculator and cleans up all resources.
+// It's safe to call Stop multiple times.
 func (c *MetricsCalculator) Stop() {
-	c.stopOnce.Do(func() {
-		c.stopMu.Lock()
-		c.stopped = true
-		c.stopMu.Unlock()
+	c.doOnce.Do(func() {
+		// Close the stop channel to signal the Start goroutine to exit
+		close(c.stopCh)
+
+		// Close the update channel to prevent new events from being processed
+		c.metricsMu.Lock()
+		defer c.metricsMu.Unlock()
 		close(c.updateCh)
+		c.metrics = nil
+
+		// Close all subscriber channels
+		c.subscribersMu.Lock()
+		defer c.subscribersMu.Unlock()
+		for ch := range c.subscribers {
+			close(ch)
+		}
+		c.subscribers = nil
 	})
 }
 
-func (c *MetricsCalculator) processEvents() {
-	for event := range c.updateCh {
-		metrics := c.getOrCreateMetrics(event)
-		metrics.Update(event)
+func (c *MetricsCalculator) metric(key string) (*Metrics, bool) {
+	c.metricsMu.RLock()
+	defer c.metricsMu.RUnlock()
+	metrics, exists := c.metrics[key]
+	return metrics, exists
+}
 
-		// Create and send update to subscribers
-		update := &proto.MetricsUpdate{
-			TargetId:    event.TargetId,
-			Key:         event.Key,
-			Min:         metrics.Min(),
-			Max:         metrics.Max(),
-			Avg:         metrics.Avg(),
-			P90:         metrics.P90(),
-			Count:       metrics.Count(),
-			LastUpdated: time.Now().UnixNano(),
-			Metadata:    event.Metadata,
-		}
-
-		c.notifySubscribers(update)
+func (c *MetricsCalculator) createMetric(key string, event *proto.Event) *Metrics {
+	metrics := &Metrics{
+		TargetID: event.TargetId,
+		Key:      event.Key,
+		Metadata: event.Metadata,
+		Samples:  ring.New(MaxSamples),
 	}
+
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	c.metrics[key] = metrics
+	return metrics
 }
 
 func (c *MetricsCalculator) getOrCreateMetrics(event *proto.Event) *Metrics {
@@ -155,21 +222,9 @@ func (c *MetricsCalculator) getOrCreateMetrics(event *proto.Event) *Metrics {
 		}
 	}
 
-	c.metricsMu.RLock()
-	metrics, exists := c.metrics[key]
-	c.metricsMu.RUnlock()
-
+	metrics, exists := c.metric(key)
 	if !exists {
-		metrics = &Metrics{
-			TargetID: event.TargetId,
-			Key:      event.Key,
-			Metadata: event.Metadata,
-			Samples:  ring.New(MaxSamples),
-		}
-
-		c.metricsMu.Lock()
-		c.metrics[key] = metrics
-		c.metricsMu.Unlock()
+		metrics = c.createMetric(key, event)
 	}
 
 	return metrics
@@ -197,21 +252,16 @@ func (m *Metrics) Update(event *proto.Event) {
 	count := atomic.LoadInt64(&m.count)
 	currentTimeMs := float64(event.ServerTimestamp) / float64(time.Millisecond)
 
-	if count > 0 {
+	if count > 0 && m.Samples != nil && m.Samples.Value != nil {
 		// For subsequent events, calculate the interval since the last event
 		lastTime := m.Samples.Value
-		if lastTime != nil {
-			// Get the last timestamp from the ring buffer (stored in milliseconds)
-			lastEventTimeMs := lastTime.(float64)
-			intervalMs = currentTimeMs - lastEventTimeMs
-			// Ensure interval is non-negative
-			if intervalMs < 0 {
-				intervalMs = NegativeIntervalClamp
-			}
+		// Get the last timestamp from the ring buffer (stored in milliseconds)
+		lastEventTimeMs := lastTime.(float64)
+		intervalMs = currentTimeMs - lastEventTimeMs
+		// Ensure interval is non-negative
+		if intervalMs < 0 {
+			intervalMs = 0
 		}
-	} else {
-		// For the first event, use a default interval of 0
-		intervalMs = 0
 	}
 
 	// Store the current timestamp in milliseconds in the circular buffer

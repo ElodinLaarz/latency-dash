@@ -1,6 +1,7 @@
 package calculator
 
 import (
+	"context"
 	"container/ring"
 	"fmt"
 	"sync"
@@ -43,8 +44,25 @@ func createTestEvent(targetID, key string, metadata map[string]string) *proto.Ev
 
 func TestMetricsUpdate(t *testing.T) {
 	calc := NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+
+	// Start the calculator in a goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+
+	// Ensure cleanup happens in the right order
+	defer func() {
+		// Cancel the context to signal the calculator to stop
+		cancel()
+		// Stop the calculator (this will clean up resources)
+		calc.Stop()
+		// Check for any errors from the calculator's Start method
+		if err := <-errChan; err != nil && err != context.Canceled {
+			t.Fatalf("Calculator error: %v", err)
+		}
+	}()
 
 	// Create a test event
 	event := createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier})
@@ -73,8 +91,25 @@ func TestMetricsUpdate(t *testing.T) {
 
 func TestMetricsCalculation(t *testing.T) {
 	calc := NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+
+	// Start the calculator in a goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+
+	// Ensure cleanup happens in the right order
+	defer func() {
+		// Cancel the context to signal the calculator to stop
+		cancel()
+		// Stop the calculator (this will clean up resources)
+		calc.Stop()
+		// Check for any errors from the calculator's Start method
+		if err := <-errChan; err != nil && err != context.Canceled {
+			t.Fatalf("Calculator error: %v", err)
+		}
+	}()
 
 	now := time.Now()
 
@@ -230,8 +265,19 @@ func TestMetricsEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			calc := NewMetricsCalculator()
-			calc.Start()
-			defer calc.Stop()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			errChan := make(chan error, 1)
+			go func() {
+				errChan <- calc.Start(ctx)
+			}()
+			defer func() {
+				calc.Stop()
+				if err := <-errChan; err != nil {
+					t.Fatal(err)
+				}
+			}()
 
 			// Process events
 			for _, event := range tt.events {
@@ -261,8 +307,19 @@ func TestMetricsEdgeCases(t *testing.T) {
 
 func TestRingBufferBehavior(t *testing.T) {
 	calc := NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	baseTime := time.Now()
 
@@ -359,8 +416,19 @@ func TestP90CalculationAccuracy(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
 	calc := NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatal(err)
+		}
+	}()
 
 	// Start multiple goroutines to simulate concurrent access
 	var wg sync.WaitGroup

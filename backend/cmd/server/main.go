@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,11 @@ import (
 	"github.com/elodin/latency-dash/backend/calculator"
 	"github.com/elodin/latency-dash/backend/generator"
 	"github.com/elodin/latency-dash/backend/server"
+)
+
+const (
+	startTimeout    = 500 * time.Millisecond
+	shutdownTimeout = 5 * time.Second
 )
 
 func main() {
@@ -38,7 +44,27 @@ func main() {
 	}()
 
 	// Start the metrics calculator
-	metricsCalculator.Start()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- metricsCalculator.Start(ctx)
+	}()
+	select {
+	case err := <-errChan:
+		if err != nil {
+			log.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	case <-time.After(startTimeout):
+		log.Println("Metrics calculator started successfully")
+	}
+	defer func() {
+		metricsCalculator.Stop()
+		if err := <-errChan; err != nil {
+			log.Printf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	// Start test event generators
 	startTestGenerators(metricsCalculator)
@@ -46,8 +72,14 @@ func main() {
 	// Wait for interrupt signal to gracefully shut down
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Println("Shutting down server...")
+	select {
+	case err := <-errChan:
+		log.Fatalf("Metric calculator returned unexpected error: %v", err)
+	case <-quit:
+		log.Println("Shutting down server...")
+	case <-time.After(shutdownTimeout):
+		log.Println("Shutting down server...")
+	}
 }
 
 func startTestGenerators(calculator *calculator.MetricsCalculator) {
@@ -59,9 +91,9 @@ func startTestGenerators(calculator *calculator.MetricsCalculator) {
 			"enterprise": 0.7, // Enterprise is 30% faster
 		},
 		"region": {
-			"us-east": 1.0,  // Baseline
-			"us-west": 1.1,  // 10% slower
-			"eu-west": 1.4,  // 40% slower
+			"us-east": 1.0, // Baseline
+			"us-west": 1.1, // 10% slower
+			"eu-west": 1.4, // 40% slower
 		},
 	}
 

@@ -1,6 +1,7 @@
 package backend_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -13,8 +14,19 @@ import (
 func TestEndToEndIntegration(t *testing.T) {
 	// Initialize components
 	calc := calculator.NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	// Subscribe to metrics updates
 	sub := calc.Subscribe()
@@ -22,14 +34,14 @@ func TestEndToEndIntegration(t *testing.T) {
 
 	// Create and start event generator
 	config := generator.Config{
-		TargetID:      "test-target",
-		KeyPrefix:     "test-key-",
-		NumKeys:       2,
-		MinInterval:   10 * time.Millisecond,
-		MaxInterval:   20 * time.Millisecond,
-		MinPayload:    10,
-		MaxPayload:    100,
-		Metadata:      map[string]string{"tier": "test"},
+		TargetID:    "test-target",
+		KeyPrefix:   "test-key-",
+		NumKeys:     2,
+		MinInterval: 10 * time.Millisecond,
+		MaxInterval: 20 * time.Millisecond,
+		MinPayload:  10,
+		MaxPayload:  100,
+		Metadata:    map[string]string{"tier": "test"},
 		MetadataRules: map[string]map[string]float64{
 			"tier": {"test": 1.0},
 		},
@@ -61,8 +73,19 @@ func TestEndToEndIntegration(t *testing.T) {
 func TestMultipleGeneratorsIntegration(t *testing.T) {
 	// Initialize components
 	calc := calculator.NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	// Subscribe to metrics updates
 	sub := calc.Subscribe()
@@ -71,27 +94,27 @@ func TestMultipleGeneratorsIntegration(t *testing.T) {
 	// Create multiple generators with different configurations
 	configs := []generator.Config{
 		{
-			TargetID:      "target-1",
-			KeyPrefix:     "service-a-",
-			NumKeys:       2,
-			MinInterval:   10 * time.Millisecond,
-			MaxInterval:   20 * time.Millisecond,
-			MinPayload:    20,
-			MaxPayload:    200,
-			Metadata:      map[string]string{"tier": "premium"},
+			TargetID:    "target-1",
+			KeyPrefix:   "service-a-",
+			NumKeys:     2,
+			MinInterval: 10 * time.Millisecond,
+			MaxInterval: 20 * time.Millisecond,
+			MinPayload:  20,
+			MaxPayload:  200,
+			Metadata:    map[string]string{"tier": "premium"},
 			MetadataRules: map[string]map[string]float64{
 				"tier": {"premium": 1.0},
 			},
 		},
 		{
-			TargetID:      "target-2",
-			KeyPrefix:     "service-b-",
-			NumKeys:       1,
-			MinInterval:   15 * time.Millisecond,
-			MaxInterval:   30 * time.Millisecond,
-			MinPayload:    15,
-			MaxPayload:    150,
-			Metadata:      map[string]string{"tier": "free"},
+			TargetID:    "target-2",
+			KeyPrefix:   "service-b-",
+			NumKeys:     1,
+			MinInterval: 15 * time.Millisecond,
+			MaxInterval: 30 * time.Millisecond,
+			MinPayload:  15,
+			MaxPayload:  150,
+			Metadata:    map[string]string{"tier": "free"},
 			MetadataRules: map[string]map[string]float64{
 				"tier": {"free": 1.5},
 			},

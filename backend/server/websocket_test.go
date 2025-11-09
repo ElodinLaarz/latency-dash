@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,8 +17,19 @@ import (
 // TestWebSocketServer tests the WebSocket server functionality
 func TestWebSocketServer(t *testing.T) {
 	calc := calculator.NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	wsServer := NewWebSocketServer(calc)
 
@@ -75,8 +87,19 @@ func TestWebSocketServer(t *testing.T) {
 // TestWebSocketServerMultipleClients tests broadcasting to multiple clients
 func TestWebSocketServerMultipleClients(t *testing.T) {
 	calc := calculator.NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	wsServer := NewWebSocketServer(calc)
 
@@ -165,8 +188,19 @@ func TestWebSocketServerMultipleClients(t *testing.T) {
 // TestWebSocketServerSubscriptionHandling tests subscription message processing
 func TestWebSocketServerSubscriptionHandling(t *testing.T) {
 	calc := calculator.NewMetricsCalculator()
-	calc.Start()
-	defer calc.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- calc.Start(ctx)
+	}()
+	defer func() {
+		calc.Stop()
+		if err := <-errChan; err != nil {
+			t.Fatalf("Metric calculator returned unexpected error: %v", err)
+		}
+	}()
 
 	wsServer := NewWebSocketServer(calc)
 
@@ -184,7 +218,7 @@ func TestWebSocketServerSubscriptionHandling(t *testing.T) {
 
 	// Send a subscription message
 	subscription := proto.SubscriptionMessage{
-		TargetId:         "test-target",
+		TargetId:        "test-target",
 		SplitByMetadata: false,
 		Keys:            []string{"key-1", "key-2"},
 	}
