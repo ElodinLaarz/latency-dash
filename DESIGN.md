@@ -9,20 +9,29 @@ A real-time latency monitoring dashboard that tracks time intervals between keye
 ```
 ┌─────────────────┐         WebSocket            ┌─────────────────┐
 │                 │◄─────────────────────────────┤                 │
-│   React SPA     │    Subscribe to targets      │   Go Backend    │
-│   (Frontend)    │─────────────────────────────►│   (Server)      │
-│                 │         HTTP/REST            │                 │
+│   React SPA     │  MetricsUpdate messages      │   Go Backend    │
+│   (Frontend)    │  Subscribe to targets        │   (Server)      │
+│                 │─────────────────────────────►│                 │
+│  DISPLAYS ONLY  │   SubscriptionMessage        │  COMPUTES ALL   │
 └─────────────────┘                              └─────────────────┘
         │                                                 │
         │  Multiple target displays                       │
         │  (side-by-side or tiled)                        │
+        │  Toggle: Split/Combine by metadata              │
         ▼                                                 ▼
-  Browser State                                   Event Generators
-  - Target A metrics                              - Target A (keys: svc-A1, svc-A2...)
-  - Target B metrics                              - Target B (keys: svc-B1, svc-B2...)
-  - Linked view state                             - Target C (keys: svc-C1, svc-C2...)
-  (ephemeral)                                     - Target N...
-                                                  (in-memory, parallel)
+  Browser State                                   Metrics Calculator
+  - Receive computed metrics                      - Process events
+  - Display metrics                               - Calculate min/max/avg/p90
+  - Split/combine toggle                          - Track per key+metadata
+  - Metadata in rows                              - Broadcast MetricsUpdate
+  (ephemeral)                                     - Timeout inactive targets
+                                                          |
+                                                          ▼
+                                                  Event Generators
+                                                  - Target A + metadata
+                                                  - Target B + metadata
+                                                  - Target N...
+                                                  (parallel, with metadata)
 ```
 
 ### Multi-Target Architecture
@@ -68,7 +77,7 @@ The system supports **N parallel target streams**:
 
 ### 1. Backend Components
 
-#### A. Event Generator (Multi-Target)
+#### A. Event Generator (Multi-Target with Metadata)
 - Generates random keyed events for **N parallel targets** at variable intervals
 - Each target runs independently with its own goroutine
 - Configurable parameters per target:
@@ -77,20 +86,49 @@ The system supports **N parallel target streams**:
   - Min/max interval between messages (default: 100ms - 5000ms)
   - Key naming pattern (default: "service-A", "service-B", etc.)
   - Payload size range
+- Events include metadata (map[string]string)
+  - Example: `{"tier": "premium", "region": "us-east"}`
+  - Metadata affects latency/payload for demonstration
+  - Free tier: 50% slower, smaller payloads
+  - Enterprise: 30% faster, 2× larger payloads
+  - Regional variance: EU 40% slower than US
 - Targets can have different keys and different update rates
+- Events are **internal only** (not sent to clients)
 
-#### B. WebSocket Manager (Multi-Target)
+#### B. Metrics Calculator (Server-Side)
+- Receives events from generators (not sent to clients)
+- Calculates metrics server-side for each key (or key+metadata)
+- Per-target monitors with configurable timeout
+- Split vs Combined mode:
+  - Combined: One metric row per key (ignores metadata)
+  - Split: Separate metric rows per key+metadata combination
+- Tracks per client preference: Different clients can request split vs combined
+- Computes:
+  - Min/Max/Avg interval latency
+  - P90 percentile latency
+  - Average backend processing time
+  - Throughput (bytes/sec)
+  - Message count
+- Maintains history: Circular buffer of 1000 measurements per key
+- Broadcasts MetricsUpdate messages to subscribed clients
+- Timeout behavior: Continues tracking for N seconds after last unsubscribe
+  - Allows client to resubscribe without losing data
+  - Default timeout: 90 seconds to 5 minutes (configurable)
+
+#### C. WebSocket Manager (Multi-Target)
 - Maintains active client connections
 - **Target subscription model**: Clients subscribe to specific target(s)
-- Broadcasts events only to clients subscribed to that target
+- Broadcasts **MetricsUpdate** messages (not raw events)
+- Filters by split/combined preference per client
 - Handles connection lifecycle (connect, disconnect, reconnect)
 - Implements heartbeat/ping-pong for connection health
 - **Subscription messages**:
-  - `SUBSCRIBE target_id` - Start receiving events for target
-  - `UNSUBSCRIBE target_id` - Stop receiving events for target
+  - `SUBSCRIBE target_id split_by_metadata` - Start receiving metrics
+  - `UNSUBSCRIBE target_id` - Stop receiving metrics
   - Supports multiple concurrent subscriptions per client
+  - Client can change split preference
 
-#### C. REST API (optional for initial version)
+#### D. REST API (optional for initial version)
 - `GET /health` - Health check endpoint
 - `GET /api/stats` - Current aggregated statistics (if needed)
 
@@ -99,51 +137,57 @@ The system supports **N parallel target streams**:
 #### A. WebSocket Client
 - Establishes and maintains connection to backend
 - Handles reconnection with exponential backoff
-- Processes incoming messages and updates state
+- **Sends SubscriptionMessage** to subscribe/unsubscribe
+- **Receives MetricsUpdate** messages (precomputed metrics)
+- Decodes protobuf binary messages
+- Updates React state with received metrics
 
-#### B. Latency Calculator
-- Tracks last timestamp per key
-- Calculates latency between consecutive messages
-- Maintains running statistics:
-  - **Min**: Minimum observed latency
-  - **Max**: Maximum observed latency
-  - **Average**: Rolling mean of all latencies
-  - **P90**: 90th percentile latency
-  - **Count**: Total number of intervals measured
-
-#### C. Data Store (React State)
-- Stores per-key metrics
-- Maintains history for percentile calculations
+#### B. Data Store (React State) - **SIMPLIFIED**
+- **No calculation logic** - just stores received metrics
 - Structure:
 ```typescript
 interface KeyMetrics {
   key: string;
-  lastTimestamp: number;
-  lastServerTimestamp: number;  // For separating network vs processing time
-  latencies: number[];  // Keep history for percentile calc (network latency only)
-  processingTimes: number[];  // Browser processing time history
-  payloadSizes: number[];  // History for throughput calculation
+  metadata: Record<string, string>;  // Empty {} if combined mode
+  
+  // All metrics received from backend (already computed)
   min: number;
   max: number;
   average: number;
   p90: number;
-  avgProcessingTime: number;  // Average browser processing time
+  avgProcessingTime: number;  // Backend processing time
   throughput: number;  // Bytes per second
   count: number;
-  lastPayloadSize: number;  // For current message
+  lastPayloadSize: number;
+  lastUpdate: number;  // For UI highlighting
 }
 ```
 
-#### D. Table Component
+**Note**: Frontend is now **display-only**. All calculations happen server-side.
+
+#### C. Split/Combined Toggle
+- **UI Control**: Toggle per target to split by metadata
+- When toggled, sends new SubscriptionMessage with updated preference
+- **Split mode**: Shows separate rows for each key+metadata combination
+  - E.g., "api {tier:free, region:us-east}" and "api {tier:premium, region:eu-west}"
+- **Combined mode**: Shows single row per key (metadata ignored)
+  - E.g., "api" with aggregated metrics across all metadata values
+
+#### D. Table Component with Metadata
 - Displays metrics in sortable columns
-- Columns: Key, Min, Max, Average, P90, Count
+- Columns: Key, Min, Max, Average, P90, Processing, Throughput, Payload, Count, Metadata
+- Metadata column (optional, visible in split mode)
+- Expandable rows showing full metadata
+  - Click arrow icon to expand row
+  - Shows metadata key-value pairs in dropdown
 - Real-time sorting based on selected column
 - Visual indicators for recent updates
+- Color coding based on thresholds
 
 ## Data Flow
 
-### Message Flow (Multi-Target)
-1. **Backend generates event** (per target)
+### Message Flow (Multi-Target with Backend Metrics)
+1. **Backend generates event** (per target) - **INTERNAL ONLY**
    ```protobuf
    message Event {
      string target_id = 1;         // Which target this event belongs to
@@ -151,25 +195,51 @@ interface KeyMetrics {
      int64 server_timestamp = 3;   // When server sent (Unix nanos)
      bytes payload = 4;            // Random data for throughput testing
      uint32 payload_size = 5;      // Size in bytes for easy reference
+     map<string, string> metadata = 6;  // Event metadata
    }
    ```
+   **Note**: Events stay on server; NOT sent to clients
 
-2. **Backend broadcasts via WebSocket** to clients subscribed to that target
+2. **Backend Metrics Calculator processes event**
+   - Looks up TargetMonitor for this target_id
+   - Checks which clients are subscribed (split vs combined preference)
+   - For split mode:
+     - Creates metricsKey = "key|meta1:val1|meta2:val2"
+     - Calculates/updates metrics for this specific key+metadata combo
+   - For combined mode:
+     - Creates metricsKey = "key" (ignores metadata)
+     - Calculates/updates aggregated metrics across all metadata
+   - Updates circular buffer (max 1000 measurements)
+   - Recalculates min/max/avg/p90/throughput
+   - Records processing time
 
-3. **Frontend receives message**
-   - Record receive time (client_receive_timestamp)
+3. **Backend broadcasts MetricsUpdate** via WebSocket
+   ```protobuf
+   message MetricsUpdate {
+     string target_id = 1;
+     string key = 2;
+     map<string, string> metadata = 3;  // Empty if combined mode
+     double min_latency = 4;            // All computed server-side
+     double max_latency = 5;
+     double avg_latency = 6;
+     double p90_latency = 7;
+     double avg_processing_time = 8;
+     double throughput = 9;
+     uint64 count = 10;
+     uint32 last_payload_size = 11;
+     int64 last_update = 12;
+   }
+   ```
+   **Sent only to clients subscribed to target_id with matching split preference**
+
+4. **Frontend receives MetricsUpdate** - **DISPLAY ONLY**
    - Deserialize protobuf message
    - Extract target_id to determine which display to update
-   - Calculate network latency = client_receive_timestamp - server_timestamp
-   - Start processing timer
-   - Extract key, payload size, and server timestamp
-   - Lookup previous server timestamp for this key **within this target**
-   - If previous exists, calculate interval latency = current_server_timestamp - previous_server_timestamp
-   - Stop processing timer (processing_time)
-   - Update statistics for this key in this target (min, max, average, p90, throughput)
-   - Store timestamps and sizes for next calculation
+   - **No calculations** - metrics already computed
+   - Update React state with received metrics
+   - Create/update row for this key (and metadata if split mode)
 
-4. **Frontend updates UI** (per target display)
+5. **Frontend updates UI** (per target display)
    - Trigger row flash animation (brief highlight) in the specific target's table
    - If **linked mode**: Update all target displays for this key simultaneously
    - If **unlinked mode**: Only re-sort the specific target's table
@@ -178,6 +248,7 @@ interface KeyMetrics {
    - Re-render table with updated metrics
    - Apply color coding based on user-defined thresholds (green → yellow → red)
    - Show only user-selected columns
+   - If split mode, show metadata badge or expandable row
 
 ### WebSocket Message Protocol (Protocol Buffers)
 
@@ -187,18 +258,36 @@ syntax = "proto3";
 
 package latency;
 
+// Internal event (server-only, not sent to clients)
 message Event {
-  string target_id = 1;         // Which target stream (e.g., "prod-us-east")
-  string key = 2;               // Service/component key (e.g., "service-A")
-  int64 server_timestamp = 3;   // Unix nanoseconds when server sent
-  bytes payload = 4;            // Random data (variable size)
-  uint32 payload_size = 5;      // Payload size in bytes
+  string target_id = 1;
+  string key = 2;
+  int64 server_timestamp = 3;
+  bytes payload = 4;
+  uint32 payload_size = 5;
+  map<string, string> metadata = 6; 
+}
+
+// Computed metrics sent to clients
+message MetricsUpdate {
+  string target_id = 1;
+  string key = 2;
+  map<string, string> metadata = 3;  // Empty if combined mode
+  double min_latency = 4;
+  double max_latency = 5;
+  double avg_latency = 6;
+  double p90_latency = 7;
+  double avg_processing_time = 8;
+  double throughput = 9;
+  uint64 count = 10;
+  uint32 last_payload_size = 11;
+  int64 last_update = 12;
 }
 
 message InitMessage {
   string message = 1;
   int64 server_time = 2;
-  repeated string available_targets = 3;  // List of target IDs available
+  repeated string available_targets = 3;
 }
 
 message SubscriptionMessage {
@@ -208,12 +297,15 @@ message SubscriptionMessage {
   }
   Action action = 1;
   string target_id = 2;
+  bool split_by_metadata = 3;  // Split or combine by metadata
 }
 ```
 
-#### Server → Client: Event Message (Binary)
-Protobuf-encoded `Event` message sent as binary WebSocket frame.
-**Only sent to clients subscribed to that event's target_id.**
+#### Server → Client: MetricsUpdate Message (Binary)
+Protobuf-encoded `MetricsUpdate` message sent as binary WebSocket frame.
+**Only sent to clients subscribed to that target_id with matching split preference.**
+
+**Client receives computed metrics** - no calculations needed.
 
 #### Server → Client: Initial State (on connect)
 Protobuf-encoded `InitMessage` sent on connection establishment.
@@ -328,6 +420,42 @@ function updateAverage(
 ```
 *In linked mode, keys are aligned in same row for easy comparison*
 
+#### Split by Metadata View
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  Latency Monitor Dashboard                              [●] Live      │
+│  Target: prod-us-east  [☑ Split by metadata]        [+ Add Target]   │
+├───────────────────────────────────────────────────────────────────────┤
+│  Key      │   │ Min │ Max │ Avg │ P90 │ Throughput │ Count │ Meta    │
+│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼─────────│
+│  api      │ ▼ │ 150 │ 500 │ 220 │ 350 │ 125 KiB/s  │  142  │ tier... │
+│           │   │     │     │     │     │            │       │         │
+│           │ Details: tier=free, region=us-east                       │
+│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼─────────│
+│  api      │ ► │ 100 │ 380 │ 180 │ 280 │ 210 KiB/s  │  201  │ tier... │
+│  api      │ ► │  70 │ 280 │ 140 │ 220 │ 315 KiB/s  │  289  │ tier... │
+│  auth     │ ► │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │ tier... │
+│  db       │ ► │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │ tier... │
+└───────────────────────────────────────────────────────────────────────┘
+```
+*Expandable arrow shows full metadata key-value pairs*
+
+#### Combined Mode (Metadata Ignored)
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  Latency Monitor Dashboard                              [●] Live      │
+│  Target: prod-us-east  [☐ Split by metadata]        [+ Add Target]   │
+├───────────────────────────────────────────────────────────────────────┤
+│  Key      │ Min │ Max │ Avg │ P90 │ Throughput │ Count │             │
+│  ─────────┼─────┼─────┼─────┼─────┼────────────┼───────┤             │
+│  api      │  70 │ 500 │ 180 │ 310 │ 217 KiB/s  │  632  │  (all meta) │
+│  auth     │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │             │
+│  db       │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │             │
+│  cache    │  50 │ 280 │ 110 │ 210 │ 410 KiB/s  │  453  │             │
+└───────────────────────────────────────────────────────────────────────┘
+```
+*Metrics aggregated across all metadata values for each key*
+
 ### Features
 
 #### Core Features
@@ -358,7 +486,28 @@ function updateAverage(
   - Visible columns
   - Sort column/direction
   - Color threshold (when unlinked)
+  - Split/Combined mode
 - **Close target**: Remove target from view (unsubscribe)
+
+#### Metadata Features
+- **Split by metadata toggle**: Per-target checkbox to enable/disable metadata splitting
+- **Split mode**: Separate rows for each key+metadata combination
+  - Shows how different metadata attributes affect latency
+  - Example: "api" with tier=free vs tier=enterprise shown separately
+  - Demonstrates performance differences (free is slower, enterprise is faster)
+- **Combined mode**: Single row per key with aggregated metrics
+  - Ignores metadata completely
+  - Simpler view when metadata not relevant
+- **Expandable metadata rows**: Click arrow to expand and view full metadata
+  - Shows all key-value pairs in collapsed section
+  - Compact view by default (truncated "tier...")
+  - Full details on demand
+- **Metadata column**: Optional column showing metadata summary
+  - Visible only in split mode
+  - Truncated for space efficiency
+- **Server-side calculations**: Backend computes metrics for both modes
+  - Metrics persist during mode toggle
+  - No data loss when switching split/combined
 
 ### Available Columns (user can show/hide)
 - Key (always visible)
@@ -366,10 +515,11 @@ function updateAverage(
 - Max Latency
 - Avg Latency
 - P90 Latency
-- Processing Time (browser)
+- Processing Time (backend, not browser anymore)
 - Throughput (KiB/s, MiB/s)
 - Payload Size (current)
 - Count (total messages)
+- Metadata (only visible in split mode)
 
 ### Color Scheme
 - **Connected**: Green indicator
