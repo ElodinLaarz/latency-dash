@@ -51,7 +51,7 @@ Open http://localhost:8080 in your browser.
 ## Architecture
 
 ```
-┌─────────────────┐         WebSocket          ┌─────────────────┐
+┌─────────────────┐         WebSocket           ┌─────────────────┐
 │   React SPA     │◄───────────────────────────►│   Go Server     │
 │   + TypeScript  │                             │   + WebSocket   │
 │   + TanStack    │                             │   + Generator   │

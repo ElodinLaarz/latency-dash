@@ -369,7 +369,7 @@ function updateAverage(
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Latency Monitor Dashboard                    [●] Live  │
-│  Target: prod-us-east                  [+ Add Target]  │
+│  Target: prod-us-east                  [+ Add Target]   │
 ├─────────────────────────────────────────────────────────┤
 │  ┌────────────────────────────────────────────────────┐ │
 │  │ Key        │ Min (ms) │ Max (ms) │ Avg (ms) │ P90  │ │
@@ -424,18 +424,18 @@ function updateAverage(
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │  Latency Monitor Dashboard                              [●] Live      │
-│  Target: prod-us-east  [☑ Split by metadata]        [+ Add Target]   │
+│  Target: prod-us-east  [Y Split by metadata]        [+ Add Target]    │
 ├───────────────────────────────────────────────────────────────────────┤
-│  Key      │   │ Min │ Max │ Avg │ P90 │ Throughput │ Count │ Meta    │
-│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼─────────│
-│  api      │ ▼ │ 150 │ 500 │ 220 │ 350 │ 125 KiB/s  │  142  │ tier... │
-│           │   │     │     │     │     │            │       │         │
-│           │ Details: tier=free, region=us-east                       │
-│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼─────────│
-│  api      │ ► │ 100 │ 380 │ 180 │ 280 │ 210 KiB/s  │  201  │ tier... │
-│  api      │ ► │  70 │ 280 │ 140 │ 220 │ 315 KiB/s  │  289  │ tier... │
-│  auth     │ ► │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │ tier... │
-│  db       │ ► │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │ tier... │
+│  Key      │   │ Min │ Max │ Avg │ P90 │ Throughput │ Count │ Meta     │
+│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼──────────│
+│  api      │ ▼ │ 150 │ 500 │ 220 │ 350 │ 125 KiB/s  │  142  │ tier...  │
+│           │   │     │     │     │     │            │       │          │
+│           │ Details: tier=free, region=us-east                        │
+│  ─────────┼───┼─────┼─────┼─────┼─────┼────────────┼───────┼──────────│
+│  api      │ ► │ 100 │ 380 │ 180 │ 280 │ 210 KiB/s  │  201  │ tier...  │
+│  api      │ ► │  70 │ 280 │ 140 │ 220 │ 315 KiB/s  │  289  │ tier...  │
+│  auth     │ ► │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │ tier...  │
+│  db       │ ► │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │ tier...  │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 *Expandable arrow shows full metadata key-value pairs*
@@ -444,14 +444,14 @@ function updateAverage(
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │  Latency Monitor Dashboard                              [●] Live      │
-│  Target: prod-us-east  [☐ Split by metadata]        [+ Add Target]   │
+│  Target: prod-us-east  [X Split by metadata]        [+ Add Target]    │
 ├───────────────────────────────────────────────────────────────────────┤
-│  Key      │ Min │ Max │ Avg │ P90 │ Throughput │ Count │             │
-│  ─────────┼─────┼─────┼─────┼─────┼────────────┼───────┤             │
-│  api      │  70 │ 500 │ 180 │ 310 │ 217 KiB/s  │  632  │  (all meta) │
-│  auth     │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │             │
-│  db       │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │             │
-│  cache    │  50 │ 280 │ 110 │ 210 │ 410 KiB/s  │  453  │             │
+│  Key      │ Min │ Max │ Avg │ P90 │ Throughput │ Count │              │
+│  ─────────┼─────┼─────┼─────┼─────┼────────────┼────── │              │
+│  api      │  70 │ 500 │ 180 │ 310 │ 217 KiB/s  │  632  │  (all meta)  │
+│  auth     │ 120 │ 450 │ 200 │ 340 │  95 KiB/s  │  156  │              │
+│  db       │ 200 │ 600 │ 310 │ 480 │  45 KiB/s  │   87  │              │
+│  cache    │  50 │ 280 │ 110 │ 210 │ 410 KiB/s  │  453  │              │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 *Metrics aggregated across all metadata values for each key*
