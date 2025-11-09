@@ -1,28 +1,96 @@
-# Angular specific
-/dist/
-/out-tsc/
-/tmp/
-/coverage/
-/e2e/test-output/
-/.angular/
-.angular/
+# Go specific
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 
-# Node modules and dependency files
-/node_modules/
-/package-lock.json
-/yarn.lock
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
 
 # Environment files
-/.env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Angular CLI and build artefacts
-/.angular-cli.json
-/.ng/
+# Frontend
+/node_modules/
+/.pnp
+.pnp.js
 
-# TypeScript cache
-*.tsbuildinfo
+# testing
+/coverage
 
-# Logs
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs
+*.log
+
+# Local development
+*.local
+
+# Build output
+/dist
+/backend/bin/
+
+# Protocol buffer generated files
+/backend/proto/*.pb.go
+
+# Frontend build artifacts
+/frontend/node_modules/
+/frontend/.next/
+/frontend/out/
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

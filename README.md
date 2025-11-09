@@ -2,51 +2,125 @@
 
 A real-time latency monitoring dashboard that tracks time intervals between keyed events with WebSocket-based live updates.
 
-![Status](https://img.shields.io/badge/status-design%20phase-blue)
+![Status](https://img.shields.io/badge/status-development-yellow)
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)
 ![React](https://img.shields.io/badge/React-18+-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5+-3178C6?logo=typescript)
 
 ## Overview
 
-This system monitors and visualizes latency metrics for keyed events in real-time. It displays min, max, average, and P90 latency measurements, with dynamic sorting and visual feedback as new data arrives.
+This system monitors and visualizes latency metrics for multiple targets in real-time. It displays min, max, average, and P90 latency measurements, with dynamic sorting and visual feedback as new data arrives.
 
 **Key Features:**
-- 📊 Real-time latency tracking per key
+- 📊 Real-time latency tracking across multiple targets
+- 🔍 Per-key metrics with metadata filtering
 - 📈 Statistical metrics (min, max, avg, p90)
-- 🔄 Dynamic sortable table
+- 🔄 Dynamic sortable tables
 - 🎨 Visual indicators for recent updates
 - 🔌 WebSocket-based live updates
 - 🔁 Auto-reconnection on disconnect
+- 🏷️ Metadata-based latency simulation (tier, region)
 
-## Quick Start
+## Project Structure
+
+```
+latency-dash/
+├── backend/                  # Go backend server
+│   ├── cmd/                  # Application entry points
+│   │   └── server/           # Main server application
+│   ├── proto/                # Protocol Buffer definitions
+│   ├── generator/            # Event generation logic
+│   ├── calculator/           # Metrics calculation
+│   ├── server/               # WebSocket server
+│   ├── go.mod               # Go module definition
+│   └── go.sum               # Go dependencies
+├── frontend/                # React frontend (to be implemented)
+└── .gitignore              # Git ignore rules
+```
+
+## Getting Started
+
+### Prerequisites
+
+- Go 1.21+
+- Node.js 18+ (for frontend)
+- Protocol Buffer compiler (protoc)
 
 ### Development
 
-**Backend** (Terminal 1):
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/elodin/latency-dash.git
+   cd latency-dash
+   ```
+
+2. **Set up the backend**
+   ```bash
+   cd backend
+   go mod download
+   
+   # Generate Protocol Buffer code
+   ./scripts/generate_proto.sh
+   
+   # Start the server
+   go run cmd/server/main.go
+   ```
+
+3. **Set up the frontend** (coming soon)
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+The backend will be available at `http://localhost:8080` by default.
+
+### Environment Variables
+
+Backend configuration can be set using environment variables:
+
+```bash
+PORT=8080              # HTTP server port
+TARGET_UPDATE_MS=1000  # Default update interval in milliseconds
+LOG_LEVEL=info        # Log level (debug, info, warn, error)
+```
+
+## Architecture
+
+The system consists of several key components:
+
+1. **Event Generator**: Simulates events with configurable metadata and latency patterns
+2. **Metrics Calculator**: Processes events and calculates statistics
+3. **WebSocket Server**: Handles real-time client connections
+4. **Frontend Dashboard**: Displays metrics with real-time updates
+
+## Development
+
+### Generating Protocol Buffers
+
+After making changes to the Protocol Buffer definitions, regenerate the Go code:
+
 ```bash
 cd backend
-go mod download
-go run main.go
+./scripts/generate_proto.sh
 ```
 
-**Frontend** (Terminal 2):
-```bash
-cd frontend
-npm install
-npm run dev
-```
+### Testing
 
-Open http://localhost:5173 in your browser.
-
-### Production
+Run the test suite:
 
 ```bash
-./build.sh
-./latency-dash
+cd backend
+go test ./...
 ```
 
-Open http://localhost:8080 in your browser.
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Architecture
 

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package latencydash;
+option go_package = "github.com/elodin/latency-dash/backend/proto";
+
+// Event represents a single timing event from a target
+message Event {
+  string target_id = 1;        // Unique identifier for the target
+  string key = 2;              // The key being measured (e.g., "api-call")
+  int64 server_timestamp = 3;  // Unix timestamp in nanoseconds
+  bytes payload = 4;           // Optional payload data
+  int32 payload_size = 5;      // Size of the payload in bytes
+  map<string, string> metadata = 6;  // Key-value pairs of metadata
+}
+
+// MetricsUpdate contains calculated metrics for a key
+message MetricsUpdate {
+  string target_id = 1;  // Source target of these metrics
+  string key = 2;        // The key these metrics are for
+  
+  // Timing metrics in milliseconds
+  double min = 3;
+  double max = 4;
+  double avg = 5;
+  double p90 = 6;
+  
+  int64 count = 7;            // Number of samples
+  int64 last_updated = 8;     // When these metrics were last updated
+  map<string, string> metadata = 9;  // Metadata from the events
+}
+
+// SubscriptionMessage is sent by clients to subscribe to updates
+message SubscriptionMessage {
+  string target_id = 1;       // Target to subscribe to (empty for all)
+  bool split_by_metadata = 2; // Whether to split metrics by metadata
+  repeated string keys = 3;   // Specific keys to subscribe to (empty for all)
+}
+
+// WebSocketMessage is the wrapper for all WebSocket messages
+message WebSocketMessage {
+  oneof content {
+    MetricsUpdate metrics_update = 1;
+    SubscriptionMessage subscription = 2;
+  }
+}
