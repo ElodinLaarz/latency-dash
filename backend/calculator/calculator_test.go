@@ -16,10 +16,10 @@ const (
 	testTargetID = "test-target"
 	testKey      = "test-key"
 	testTier     = "test"
-	
-	numWorkers       = 10
+
+	numWorkers      = 10
 	eventsPerWorker = 10
-	
+
 	// Time constants
 	shortWait = 100 * time.Millisecond
 	longWait  = 500 * time.Millisecond
@@ -32,12 +32,12 @@ func createTestEvent(targetID, key string, metadata map[string]string) *proto.Ev
 	}
 
 	return &proto.Event{
-		TargetId:       targetID,
-		Key:            key,
+		TargetId:        targetID,
+		Key:             key,
 		ServerTimestamp: time.Now().UnixNano(),
-		Payload:        []byte("test"),
+		Payload:         []byte("test"),
 		PayloadSize:     4,
-		Metadata:       metadata,
+		Metadata:        metadata,
 	}
 }
 
@@ -64,7 +64,7 @@ func TestMetricsUpdate(t *testing.T) {
 	for k := range calc.metrics {
 		if k == key || k == key+":tier="+testTier {
 			metrics := calc.metrics[k]
-			assert.Equal(t, int64(1), metrics.GetCount(), "Should have 1 sample")
+			assert.Equal(t, int64(1), metrics.Count(), "Should have 1 sample")
 			return
 		}
 	}
@@ -113,32 +113,32 @@ func TestMetricsCalculation(t *testing.T) {
 	}
 
 	// We should have at least one sample
-	assert.Greater(t, metrics.GetCount(), int64(0), "Should have at least one sample")
+	assert.Greater(t, metrics.Count(), int64(0), "Should have at least one sample")
 
 	// Check that metrics are within expected ranges
 	// We're not checking exact values since they depend on timing
-	min := metrics.GetMin()
-	max := metrics.GetMax()
-	avg := metrics.GetAvg()
+	min := metrics.Min()
+	max := metrics.Max()
+	avg := metrics.Avg()
 
 	assert.GreaterOrEqual(t, min, 0.0, "Min should be >= 0")
 	assert.GreaterOrEqual(t, max, min, "Max should be >= Min")
 	assert.GreaterOrEqual(t, avg, min, "Avg should be >= Min")
 	assert.LessOrEqual(t, avg, max, "Avg should be <= Max")
-	assert.GreaterOrEqual(t, metrics.GetP90(), 0.0, "P90 should be >= 0")
+	assert.GreaterOrEqual(t, metrics.P90(), 0.0, "P90 should be >= 0")
 }
 
-func TestMetricsGetters(t *testing.T) {
+func TestMetrics(t *testing.T) {
 	m := &Metrics{
 		Samples: ring.New(1),
 	}
 
 	// Test initial values
-	assert.Equal(t, int64(0), m.GetCount())
-	assert.Equal(t, 0.0, m.GetMin())
-	assert.Equal(t, 0.0, m.GetMax())
-	assert.Equal(t, 0.0, m.GetAvg())
-	assert.Equal(t, 0.0, m.GetP90())
+	assert.Equal(t, int64(0), m.Count())
+	assert.Equal(t, 0.0, m.Min())
+	assert.Equal(t, 0.0, m.Max())
+	assert.Equal(t, 0.0, m.Avg())
+	assert.Equal(t, 0.0, m.P90())
 
 	// Update with some values
 	m.mu.Lock()
@@ -151,11 +151,11 @@ func TestMetricsGetters(t *testing.T) {
 	m.mu.Unlock()
 
 	// Test updated values
-	assert.Equal(t, int64(1), m.GetCount())
-	assert.Equal(t, 100.0, m.GetMin())
-	assert.Equal(t, 100.0, m.GetMax())
-	assert.Equal(t, 100.0, m.GetAvg())
-	assert.Equal(t, 100.0, m.GetP90())
+	assert.Equal(t, int64(1), m.Count())
+	assert.Equal(t, 100.0, m.Min())
+	assert.Equal(t, 100.0, m.Max())
+	assert.Equal(t, 100.0, m.Avg())
+	assert.Equal(t, 100.0, m.P90())
 }
 
 func TestMetricsEdgeCases(t *testing.T) {
@@ -170,12 +170,12 @@ func TestMetricsEdgeCases(t *testing.T) {
 				createTestEvent(testTargetID, testKey, map[string]string{"tier": testTier}),
 			},
 			expected: func(t *testing.T, metrics *Metrics) {
-				assert.Equal(t, int64(1), metrics.GetCount())
+				assert.Equal(t, int64(1), metrics.Count())
 				// For single event, all metrics should be 0 (first interval)
-				assert.Equal(t, 0.0, metrics.GetMin())
-				assert.Equal(t, 0.0, metrics.GetMax())
-				assert.Equal(t, 0.0, metrics.GetAvg())
-				assert.Equal(t, 0.0, metrics.GetP90())
+				assert.Equal(t, 0.0, metrics.Min())
+				assert.Equal(t, 0.0, metrics.Max())
+				assert.Equal(t, 0.0, metrics.Avg())
+				assert.Equal(t, 0.0, metrics.P90())
 			},
 		},
 		{
@@ -190,10 +190,10 @@ func TestMetricsEdgeCases(t *testing.T) {
 				}(),
 			},
 			expected: func(t *testing.T, metrics *Metrics) {
-				assert.Equal(t, int64(2), metrics.GetCount())
+				assert.Equal(t, int64(2), metrics.Count())
 				// Second event at same time should result in very small interval (due to execution time)
-				min := metrics.GetMin()
-				max := metrics.GetMax()
+				min := metrics.Min()
+				max := metrics.Max()
 				assert.GreaterOrEqual(t, min, 0.0, "Min should be >= 0")
 				assert.LessOrEqual(t, min, 1.0, "Min should be very small for same timestamp")
 				assert.GreaterOrEqual(t, max, min, "Max should be >= Min")
@@ -214,15 +214,15 @@ func TestMetricsEdgeCases(t *testing.T) {
 				}(),
 			},
 			expected: func(t *testing.T, metrics *Metrics) {
-				assert.Equal(t, int64(2), metrics.GetCount())
+				assert.Equal(t, int64(2), metrics.Count())
 				// Negative intervals should be clamped to 0
-				min := metrics.GetMin()
-				max := metrics.GetMax()
-				avg := metrics.GetAvg()
+				min := metrics.Min()
+				max := metrics.Max()
+				avg := metrics.Avg()
 				assert.Equal(t, 0.0, min, "Min should be 0 due to negative interval protection")
 				assert.Equal(t, 0.0, max, "Max should be 0")
 				assert.Equal(t, 0.0, avg, "Avg should be 0")
-				assert.Equal(t, 0.0, metrics.GetP90(), "P90 should be 0")
+				assert.Equal(t, 0.0, metrics.P90(), "P90 should be 0")
 			},
 		},
 	}
@@ -273,7 +273,7 @@ func TestRingBufferBehavior(t *testing.T) {
 		event := createTestEvent(testTargetID, testKey, nil)
 		event.ServerTimestamp = baseTime.Add(time.Duration(i*100) * time.Millisecond).UnixNano()
 		calc.ProcessEvent(event)
-		
+
 		// Small delay to ensure events are processed in order
 		if i%100 == 0 {
 			time.Sleep(1 * time.Millisecond)
@@ -293,15 +293,15 @@ func TestRingBufferBehavior(t *testing.T) {
 	calc.metricsMu.RUnlock()
 
 	assert.NotNil(t, metrics)
-	count := metrics.GetCount()
+	count := metrics.Count()
 	assert.GreaterOrEqual(t, count, int64(1000), "Should count at least MaxSamples events")
 	assert.LessOrEqual(t, count, int64(numEvents), "Should not count more than sent events")
 
 	// Metrics should be based on the most recent samples in the ring buffer
-	min := metrics.GetMin()
-	max := metrics.GetMax()
-	avg := metrics.GetAvg()
-	p90 := metrics.GetP90()
+	min := metrics.Min()
+	max := metrics.Max()
+	avg := metrics.Avg()
+	p90 := metrics.P90()
 
 	assert.GreaterOrEqual(t, min, 0.0)
 	assert.GreaterOrEqual(t, max, min)
@@ -320,29 +320,29 @@ func TestP90CalculationAccuracy(t *testing.T) {
 
 	// Add a single event first to establish baseline
 	event1 := &proto.Event{
-		TargetId:       testTargetID,
-		Key:            testKey,
+		TargetId:        testTargetID,
+		Key:             testKey,
 		ServerTimestamp: baseTime.UnixNano(),
-		Payload:        []byte("test"),
+		Payload:         []byte("test"),
 		PayloadSize:     4,
-		Metadata:       map[string]string{"tier": testTier},
+		Metadata:        map[string]string{"tier": testTier},
 	}
 	metrics.Update(event1)
 
 	// Add a second event with a known interval
 	event2 := &proto.Event{
-		TargetId:       testTargetID,
-		Key:            testKey,
+		TargetId:        testTargetID,
+		Key:             testKey,
 		ServerTimestamp: baseTime.Add(100 * time.Millisecond).UnixNano(),
-		Payload:        []byte("test"),
+		Payload:         []byte("test"),
 		PayloadSize:     4,
-		Metadata:       map[string]string{"tier": testTier},
+		Metadata:        map[string]string{"tier": testTier},
 	}
 	metrics.Update(event2)
 
 	// Check the values
-	p90 := metrics.GetP90()
-	count := metrics.GetCount()
+	p90 := metrics.P90()
+	count := metrics.Count()
 
 	// The timestamp difference should be 100ms = 100,000,000 nanoseconds
 	expectedDiffNs := int64(100 * time.Millisecond)
@@ -351,7 +351,7 @@ func TestP90CalculationAccuracy(t *testing.T) {
 
 	// For just 2 events, check basic properties
 	assert.Equal(t, int64(2), count)
-	
+
 	// P90 should be a reasonable value (exact calculation is complex with ring buffer)
 	assert.GreaterOrEqual(t, p90, 0.0, "P90 should be >= 0")
 	assert.LessOrEqual(t, p90, 100.0, "P90 should be <= max interval")
@@ -393,7 +393,7 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			// We expect up to eventsPerWorker intervals (first event is also counted as an interval with 0 duration)
 			expectedMaxCount := int64(eventsPerWorker)
-			count := metrics.GetCount()
+			count := metrics.Count()
 			assert.GreaterOrEqual(t, count, int64(0), "Should have processed some events")
 			assert.LessOrEqual(t, count, expectedMaxCount, "Should not have more intervals than events")
 		})

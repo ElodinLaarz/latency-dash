@@ -13,13 +13,13 @@ import (
 const (
 	// MaxSamples is the maximum number of samples to keep for each key
 	MaxSamples = 1000
-	
+
 	// Time conversion constants
 	millisecondsToNanoseconds = int64(time.Millisecond)
-	
+
 	// P90Percentile is the percentile value for 90th percentile
 	P90Percentile = 90
-	
+
 	// NegativeIntervalClamp is the value to clamp negative intervals to
 	NegativeIntervalClamp = 0
 )
@@ -31,7 +31,7 @@ type Metrics struct {
 
 	Samples *ring.Ring // Circular buffer of recent samples
 	mu      sync.RWMutex
-	
+
 	// All fields below are accessed atomically
 	count int64 // Number of samples
 	min   int64 // Minimum latency in milliseconds (stored as int64 to use atomic operations)
@@ -40,28 +40,28 @@ type Metrics struct {
 	p90   int64 // 90th percentile latency in milliseconds (stored as int64 to use atomic operations)
 }
 
-// GetCount returns the current count of samples (thread-safe)
-func (m *Metrics) GetCount() int64 {
+// Count returns the current count of samples (thread-safe)
+func (m *Metrics) Count() int64 {
 	return atomic.LoadInt64(&m.count)
 }
 
-// GetMin returns the minimum latency in milliseconds (thread-safe)
-func (m *Metrics) GetMin() float64 {
+// Min returns the minimum latency in milliseconds (thread-safe)
+func (m *Metrics) Min() float64 {
 	return float64(atomic.LoadInt64(&m.min)) / float64(time.Millisecond)
 }
 
-// GetMax returns the maximum latency in milliseconds (thread-safe)
-func (m *Metrics) GetMax() float64 {
+// Max returns the maximum latency in milliseconds (thread-safe)
+func (m *Metrics) Max() float64 {
 	return float64(atomic.LoadInt64(&m.max)) / float64(time.Millisecond)
 }
 
-// GetAvg returns the average latency in milliseconds (thread-safe)
-func (m *Metrics) GetAvg() float64 {
+// Avg returns the average latency in milliseconds (thread-safe)
+func (m *Metrics) Avg() float64 {
 	return float64(atomic.LoadInt64(&m.avg)) / float64(time.Millisecond)
 }
 
-// GetP90 returns the 90th percentile latency in milliseconds (thread-safe)
-func (m *Metrics) GetP90() float64 {
+// P90 returns the 90th percentile latency in milliseconds (thread-safe)
+func (m *Metrics) P90() float64 {
 	return float64(atomic.LoadInt64(&m.p90)) / float64(time.Millisecond)
 }
 
@@ -132,11 +132,11 @@ func (c *MetricsCalculator) processEvents() {
 		update := &proto.MetricsUpdate{
 			TargetId:    event.TargetId,
 			Key:         event.Key,
-			Min:         metrics.GetMin(),
-			Max:         metrics.GetMax(),
-			Avg:         metrics.GetAvg(),
-			P90:         metrics.GetP90(),
-			Count:       metrics.GetCount(),
+			Min:         metrics.Min(),
+			Max:         metrics.Max(),
+			Avg:         metrics.Avg(),
+			P90:         metrics.P90(),
+			Count:       metrics.Count(),
 			LastUpdated: time.Now().UnixNano(),
 			Metadata:    event.Metadata,
 		}
@@ -227,7 +227,7 @@ func (m *Metrics) Update(event *proto.Event) {
 		atomic.StoreInt64(&m.avg, intervalNs)
 		atomic.AddInt64(&m.count, 1)
 		p90 := m.calculatePercentile(P90Percentile)
-		atomic.StoreInt64(&m.p90, int64(p90 * float64(time.Millisecond)))
+		atomic.StoreInt64(&m.p90, int64(p90*float64(time.Millisecond)))
 		return
 	}
 
@@ -264,7 +264,7 @@ func (m *Metrics) Update(event *proto.Event) {
 
 	atomic.AddInt64(&m.count, 1)
 	p90 := m.calculatePercentile(P90Percentile)
-	atomic.StoreInt64(&m.p90, int64(p90 * float64(time.Millisecond)))
+	atomic.StoreInt64(&m.p90, int64(p90*float64(time.Millisecond)))
 }
 
 func (m *Metrics) calculatePercentile(p float64) float64 {
